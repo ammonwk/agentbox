@@ -34,8 +34,9 @@
  * 10-17, 69% were never followed by another and 5% by real work (a push, a
  * merge, a production run), mostly a steward finding on a PR already
  * landed; a cold resume for those costs less than a process each for the
- * other 95%. An agent's main conversation is the exception: its next message
- * is coming, and keeping its cache warm is the point.
+ * other 95%. A session you pinned is the exception (an extension pins the
+ * conversation it keeps): its next message is coming, and keeping its cache
+ * warm is the point.
  *
  * A provider whose cache outlives its process (`ProviderAdapter.parkIdleMs`)
  * is parked after that long instead, warm or not: nothing the process holds

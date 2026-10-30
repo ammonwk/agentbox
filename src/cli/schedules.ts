@@ -12,9 +12,9 @@ const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", 
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 
 /** `agentbox schedule <when> [--provider claude] [--fallback omp,codex] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]
- *  [--note-cmd CMD] [--to AGENT] [--org|--personal] <prompt…|->` */
+ *  [--note-cmd CMD] [--org|--personal] <prompt…|->` */
 export async function schedule(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["provider", "fallback", "cwd", "account", "model", "effort", "name", "note-cmd", "to"], ["org", "personal"]);
+  const { flags, rest } = parseArgs(args, ["provider", "fallback", "cwd", "account", "model", "effort", "name", "note-cmd"], ["org", "personal"]);
   const [when, ...words] = rest;
   if (!when) throw new Error('schedule needs a time and a prompt: agentbox schedule "tomorrow at 9am" fix the flaky test');
   const agent = (str(flags.get("provider")) ?? "claude") as ProviderId;
@@ -24,7 +24,6 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
   const prompt = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ").trim();
   const noteCmd = str(flags.get("note-cmd"));
   if (!prompt && !noteCmd) throw new Error("a scheduled session needs a prompt (the words after the time, or - to read it from stdin)");
-  const to = str(flags.get("to"));
 
   let accountId: string | null = null;
   const wanted = str(flags.get("account"));
@@ -39,8 +38,7 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
     when,
     label: str(flags.get("name")),
     noteCmd,
-    agent: to,
-    spec: to ? { prompt: prompt || undefined } : {
+    spec: {
       provider: agent,
       cwd: resolve(str(flags.get("cwd")) ?? process.cwd()),
       prompt: prompt || undefined,
@@ -88,18 +86,15 @@ function line(sc: Schedule): string {
   const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : sc.rule.kind === "red" ? "on red" : "—";
   const rule = isRecurring(sc.rule) ? `${describeRule(sc.rule)}, repeating` : describeRule(sc.rule);
   const failed = sc.lastError ? `  [last time: ${sc.lastError}]` : "";
-  const who = sc.agent ? `to ${sc.agent}` : [sc.spec.provider, ...(sc.spec.fallbacks ?? [])].join(" → ");
+  const who = [sc.spec.provider, ...(sc.spec.fallbacks ?? [])].join(" → ");
   return `${sc.id}  ${next.padEnd(7)} ${rule} · ${who} · ${title}${kind(sc)}${failed}`;
 }
 
-/** What sets a note-command schedule or one that speaks to an agent apart, and
- *  when it last had something to say: ` · note: cmd · last note 12m ago`. */
+/** What sets a note-command schedule apart, and when it last had something
+ *  to say: ` · note: cmd · last note 12m ago`. */
 function kind(sc: Schedule): string {
-  if (!sc.noteCmd && !sc.agent) return "";
-  const parts: string[] = [];
-  if (sc.noteCmd) parts.push(`note: ${sc.noteCmd}`);
-  parts.push(sc.lastRunAt ? `last ${sc.noteCmd ? "note" : "said"} ${ago(sc.lastRunAt)} ago` : `no ${sc.noteCmd ? "note" : "run"} yet`);
-  return ` · ${parts.join(" · ")}`;
+  if (!sc.noteCmd) return "";
+  return ` · note: ${sc.noteCmd} · ${sc.lastRunAt ? `last note ${ago(sc.lastRunAt)} ago` : "no note yet"}`;
 }
 
 function ago(at: number): string {

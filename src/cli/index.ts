@@ -536,11 +536,10 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         "every weekday at 8:30", "every 2 hours"; --fallback: the
                         providers to start it on, in order, when --provider has no
                         account with room
-           [--note-cmd CMD] [--to AGENT]
+           [--note-cmd CMD]
                         for a recurring one: run CMD in DIR each time it comes due and
                         say what it prints before the prompt, nothing when it prints
-                        nothing; --to says it to that agent's main conversation
-                        instead of starting a session
+                        nothing
            [--org|--personal]
                         on the org's accounts or your own; absent, your default when it starts
   schedules [--json]    what is set to start, soonest first

@@ -21,11 +21,8 @@
  *
  * A timed recurring one may have a note command (`Schedule.noteCmd`): it
  * runs each time the schedule comes due, and what it prints goes before the
- * prompt; when it prints nothing, nothing happens. And it may speak to an
- * agent (`Schedule.agent`) instead of starting a session: the note, or the
- * prompt, is said to the agent's main conversation, which the agent keeps
- * (src/core/agents.ts `say`). A main mid-turn is never typed into: that time
- * is skipped, and the command says what is still true the next time.
+ * prompt; when it prints nothing, nothing happens. A conversation that is
+ * spoken to on a timer is an extension's to keep (docs/extensions.md).
  *
  * A session that finished — one a schedule started and no longer speaks to,
  * or one another session started — closes itself an hour after its last
@@ -35,7 +32,7 @@
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { agentMains, deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
+import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
@@ -81,16 +78,9 @@ export function finished(s: Session, claims: ReadonlyMap<string, unknown>): bool
   return !claims.has(s.id) && turnStatus(s.lastMessage)?.kind !== "needs";
 }
 
-/** What a note command or a schedule that speaks to an agent did when it came
- *  due: the session spoken to or started, or why there is none this time. */
+/** What a schedule with a note command did when it came due: the session it
+ *  started, or why there is none this time. */
 type Came = { sessionId: string } | { quiet: string };
-
-/** The agents a schedule may speak to (src/core/agents.ts). */
-export interface AgentsPort {
-  note(name: string, text: string, scheduleId: string): Promise<{ session: string } | { quiet: string }>;
-  dir(name: string): string;
-  busy(name: string): boolean;
-}
 
 export interface ScheduleEdit {
   /** Plain words, as for a new one. */
@@ -109,8 +99,6 @@ export interface ScheduleEdit {
 /** What a new schedule may say beyond when and what. */
 export interface ScheduleExtras {
   noteCmd?: string | null;
-  /** Speak to this agent's main conversation instead of starting a session. */
-  agent?: string | null;
 }
 
 export class Scheduler {
@@ -122,12 +110,11 @@ export class Scheduler {
   private closesCheckedAt = 0;
   /** A red one whose session did not start: not tried again before this. */
   private redHeldUntil = new Map<string, number>();
-  /** Schedules whose note command is running, or whose note is being said. */
+  /** Schedules whose note command is running. */
   private coming = new Set<string>();
 
   constructor(
     private readonly fleet: Fleet,
-    private readonly agents: () => AgentsPort,
     /** Something changed that the app state shows. */
     private readonly changed: () => void,
     private readonly now: () => number = Date.now,
@@ -145,13 +132,11 @@ export class Scheduler {
   }
 
   async create(input: { when: string; spec: ScheduleSpec; label?: string | null } & ScheduleExtras): Promise<Schedule> {
-    const extras = { noteCmd: input.noteCmd?.trim() || null, agent: input.agent?.trim() || null };
-    // One that speaks to an agent starts nothing: it runs where the agent's directory is.
-    if (extras.agent) this.agents().dir(extras.agent);
-    else checkSpec(input.spec);
+    const extras = { noteCmd: input.noteCmd?.trim() || null };
+    checkSpec(input.spec);
     const now = this.now();
     const rule = await settle(parse(input.when, now), input.spec);
-    checkExtras(rule, input.spec, extras);
+    checkExtras(rule, extras);
     const s: Schedule = {
       id: freshId(),
       rule,
@@ -192,7 +177,7 @@ export class Scheduler {
     if (edit.noteCmd !== undefined) patch.noteCmd = edit.noteCmd?.trim() || null;
     const enabled = edit.enabled ?? s.enabled;
     const rule = patch.rule ?? s.rule;
-    checkExtras(rule, spec, { ...s, ...patch });
+    checkExtras(rule, { ...s, ...patch });
     // A new time, or switching it back on, is a fresh start: the last
     // failure is behind it.
     if (edit.when !== undefined || (edit.enabled === true && !s.enabled)) {
@@ -218,7 +203,7 @@ export class Scheduler {
   /** Start it now. A one-time one is then done; a recurring one keeps its times. */
   async runNow(id: string): Promise<string> {
     const s = this.get(id);
-    if (s.noteCmd || s.agent) {
+    if (s.noteCmd) {
       if (this.coming.has(id)) throw new FleetError(409, "it is at it right now: its note command is running");
       const came = await this.come(s, this.now(), true);
       if ("quiet" in came) throw new FleetError(409, came.quiet);
@@ -245,7 +230,7 @@ export class Scheduler {
       for (const s of listSchedules()) {
         if (!s.enabled || s.nextAt === null || s.nextAt > now) continue;
         // Not waited for: its command may take a while, and the rest are due too.
-        if (s.noteCmd || s.agent) void this.come(s, now, false).catch((e) => console.error(`agentbox: schedule ${s.id}:`, e));
+        if (s.noteCmd) void this.come(s, now, false).catch((e) => console.error(`agentbox: schedule ${s.id}:`, e));
         else await this.fire(s, now, false);
       }
       if (now - this.mergesCheckedAt >= MERGE_CHECK_MS) {
@@ -339,11 +324,9 @@ export class Scheduler {
    * Close finished sessions once their last message is an hour old: the ones
    * a schedule started and no longer speaks to, and the ones another session
    * started (`finished`), unless one has a session of its own still open or
-   * you pinned or bookmarked it. An agent's main conversation is never closed
-   * this way.
+   * you pinned or bookmarked it.
    */
   private async closeFinished(now: number): Promise<void> {
-    const mains = new Set(agentMains().map((id) => this.fleet.heir(id)));
     const sessions = this.fleet.sessions();
     const open = new Set(sessions.filter((s) => s.closedAt === null && s.status !== "closed").map((s) => s.id));
     const parents = new Set(sessions.filter((s) => open.has(s.id) && s.parent).map((s) => s.parent!));
@@ -351,7 +334,7 @@ export class Scheduler {
     const claims = unfinishedClaims();
     let closed = false;
     for (const s of sessions) {
-      if (!open.has(s.id) || mains.has(s.id) || parents.has(s.id)) continue;
+      if (!open.has(s.id) || parents.has(s.id)) continue;
       if (!scheduled.has(s.id) && !s.parent) continue;
       // You pinned or bookmarked it: it is not clutter to you.
       if (s.pinOrder !== null || s.bookmarkedAt !== null) continue;
@@ -384,8 +367,7 @@ export class Scheduler {
   }
 
   /**
-   * A schedule with a note command, or one that keeps to a session, has come
-   * due (or is run by hand: `early`). Its next time is set first, so a slow
+   * A schedule with a note command has come due (or is run by hand: `early`). Its next time is set first, so a slow
    * command is not started twice.
    */
   private async come(due: Schedule, now: number, early: boolean): Promise<Came> {
@@ -402,48 +384,25 @@ export class Scheduler {
   }
 
   private async say(due: Schedule, now: number, early: boolean): Promise<Came> {
-    const busy = { quiet: "the main conversation it speaks to is mid-turn or showing a prompt, so this time was skipped; its next time says what is still true" };
-    // Before the command is run: nothing it prints could be said.
-    if (due.agent && this.agents().busy(due.agent)) return busy;
-    let note: string | undefined;
-    if (due.noteCmd) {
-      try {
-        note = await runNote(due, due.agent ? this.agents().dir(due.agent) : dirOf(due.spec));
-      } catch (e) {
-        const message = `its note command failed: ${(e as Error).message}`;
-        console.error(`agentbox: schedule ${due.id}: ${message}`);
-        updateSchedule(due.id, { lastError: message });
-        return { quiet: message };
-      }
-      if (!note) {
-        // Nothing to say is not a run, and not a failure: the last one is behind it.
-        if (due.lastError) updateSchedule(due.id, { lastError: null });
-        return { quiet: "its note command printed nothing, so there is nothing to say" };
-      }
+    let note: string;
+    try {
+      note = await runNote(due, dirOf(due.spec));
+    } catch (e) {
+      const message = `its note command failed: ${(e as Error).message}`;
+      console.error(`agentbox: schedule ${due.id}: ${message}`);
+      updateSchedule(due.id, { lastError: message });
+      return { quiet: message };
+    }
+    if (!note) {
+      // Nothing to say is not a run, and not a failure: the last one is behind it.
+      if (due.lastError) updateSchedule(due.id, { lastError: null });
+      return { quiet: "its note command printed nothing, so there is nothing to say" };
     }
     // As it is now: the command took a while, and it may have been deleted or paused under it.
     const s = getSchedule(due.id);
     if (!s || (!s.enabled && !early)) return { quiet: "it was deleted or paused meanwhile" };
-    if (!s.agent) {
-      const sid = await this.fire(s, now, early, note);
-      return sid ? { sessionId: sid } : { quiet: this.get(s.id).lastError ?? "it did not start" };
-    }
-    const text = [note, s.spec.prompt].filter(Boolean).join("\n\n");
-    if (!text) return { quiet: "it has neither a note nor a prompt to say" };
-    let came: { session: string } | { quiet: string };
-    try {
-      came = await this.agents().note(s.agent, text, s.id);
-    } catch (e) {
-      came = { quiet: `could not say it to ${s.agent}: ${(e as Error).message}` };
-    }
-    if ("quiet" in came) {
-      console.error(`agentbox: schedule ${s.id}: ${came.quiet}`);
-      updateSchedule(s.id, { lastError: came.quiet });
-      return came;
-    }
-    updateSchedule(s.id, { lastRunAt: now, lastSessionId: came.session, lastError: null });
-    console.log(`agentbox: schedule ${s.id} spoke to ${s.agent} in ${came.session}`);
-    return { sessionId: came.session };
+    const sid = await this.fire(s, now, early, note);
+    return sid ? { sessionId: sid } : { quiet: this.get(s.id).lastError ?? "it did not start" };
   }
 
   /** The session it started, or null when it could not (said on the schedule).
@@ -523,7 +482,7 @@ function dirOf(spec: ScheduleSpec): string | null {
 
 /**
  * What the schedule's note command prints, trimmed: "" when it has nothing to
- * say. Run by `sh -c` in `cwd` (the schedule's directory, or its agent's) at
+ * say. Run by `sh -c` in `cwd` (the schedule's directory) at
  * the lowest priority, and killed with everything it started after
  * `NOTE_TIMEOUT_S`. It is told which schedule it speaks for and the session
  * that one spoke to last (`AGENTBOX_SCHEDULE`, `AGENTBOX_SCHEDULE_SESSION`).
@@ -546,14 +505,12 @@ async function runNote(s: Schedule, cwd: string | null): Promise<string> {
   return note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX)}\n[agentbox: the note was cut here, at ${NOTE_MAX} characters.]` : note;
 }
 
-/** A note command and speaking to an agent are for a schedule that repeats at
- *  a time: an event has its own note, and a one-time one has no next time. */
-function checkExtras(rule: ScheduleRule, spec: ScheduleSpec, x: { noteCmd?: string | null; agent?: string | null }): void {
-  if (!x.noteCmd && !x.agent) return;
-  if (rule.kind !== "every" && rule.kind !== "weekly") {
-    throw new FleetError(400, "a note command and speaking to an agent are for a schedule that repeats at a time: “every 10 minutes”, “every weekday at 9am”");
+/** A note command is for a schedule that repeats at a time: an event has its
+ *  own note, and a one-time one has no next time. */
+function checkExtras(rule: ScheduleRule, x: { noteCmd?: string | null }): void {
+  if (x.noteCmd && rule.kind !== "every" && rule.kind !== "weekly") {
+    throw new FleetError(400, "a note command is for a schedule that repeats at a time: “every 10 minutes”, “every weekday at 9am”");
   }
-  if (!x.noteCmd && !spec.prompt) throw new FleetError(400, "with no note command it needs a prompt: that is what it says each time");
 }
 
 function parse(when: string, now: number): ScheduleRule {

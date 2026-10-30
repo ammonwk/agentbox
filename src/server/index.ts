@@ -91,7 +91,6 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import { Agents, MAX_AVATAR, readAvatar, writeAvatar } from "../core/agents";
 import { addExtension, ExtensionError, Extensions, removeExtension } from "../core/extensions";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
@@ -179,11 +178,9 @@ export const fleet = new Fleet({
 });
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
-export const scheduler = new Scheduler(fleet, () => agents, () => scheduleCold());
+export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
-/** Programs that run on agentbox's API, shown on the Agents page (src/core/agents.ts). */
-export const agents = new Agents(fleet, `http://127.0.0.1:${PORT}`);
 /** Programs that run on agentbox's API, each with a page under /x/<name>/ (src/core/extensions.ts). */
 export const extensions = new Extensions(`http://127.0.0.1:${PORT}`, () => scheduleCold());
 /** The registered repo a start names: its id, its GitHub `owner/name`, or its ref. */
@@ -1268,7 +1265,6 @@ const router = new Router(mapError)
     const bytes = Number(url.searchParams.get("bytes")) || undefined;
     return json({ text: extensions.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
   })
-  // ----- agents (src/core/agents.ts, docs/agents.md)
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
   // An org session on another member's machine: its conversation, as that machine answers.
@@ -1304,69 +1300,16 @@ const router = new Router(mapError)
     scheduleCold();
     return json(null);
   })
-  .add("GET", "/api/agents", () => json(agents.list()))
-  .add("POST", "/api/agents", async ({ req }) => json(await agents.register(requireString(await readBody(req), "dir")), 201))
-  .add("GET", "/api/agents/:name", ({ params }) => json(agents.get(params.name!)))
-  .add("PATCH", "/api/agents/:name", async ({ req, params }) => {
-    const b = await readBody(req);
-    const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
-    const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    return json(await agents.patch(params.name!, { main, enabled }));
-  })
-  .add("DELETE", "/api/agents/:name", ({ params }) => {
-    agents.remove(params.name!);
-    return json(null);
-  })
-  .add("GET", "/api/agents/:name/avatar", ({ params }) => {
-    const a = readAvatar(params.name!);
-    if (!a) throw new HttpError(404, "it has no picture");
-    // The page asks with ?v=<when it was set>, so a new one is a new address.
-    return new Response(a.bytes, { headers: { "content-type": a.type, "cache-control": "private, max-age=31536000", "x-content-type-options": "nosniff" } });
-  })
-  .add("PUT", "/api/agents/:name/avatar", async ({ req, params }) => {
-    if (Number(req.headers.get("content-length") ?? 0) > MAX_AVATAR) throw new HttpError(413, "a picture is at most 2 MB");
-    writeAvatar(params.name!, new Uint8Array(await req.arrayBuffer()));
-    return json(agents.get(params.name!));
-  })
-  .add("DELETE", "/api/agents/:name/avatar", ({ params }) => {
-    writeAvatar(params.name!, null);
-    return json(agents.get(params.name!));
-  })
-  .add("POST", "/api/agents/:name/restart", async ({ params }) => json(await agents.restart(params.name!)))
-  .add("GET", "/api/agents/:name/log", ({ params, url }) => {
-    const bytes = Number(url.searchParams.get("bytes")) || undefined;
-    return json({ text: agents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
-  })
-  .add("GET", "/api/agents/:name/view", async ({ params, url }) => json(await agents.view(params.name!, url.searchParams.get("tab"))))
-  .add("POST", "/api/agents/:name/action", async ({ req, params }) => {
-    const b = await readBody(req);
-    requireString(b, "action");
-    // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
-    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
-    return json(await agents.action(params.name!, b, caller));
-  })
-  .add("POST", "/api/agents/:name/chat", async ({ req, params }) => {
-    const b = await readBody(req);
-    const text = requireString(b, "text");
-    if (!text.trim()) throw new HttpError(400, "the message is empty");
-    const sendId = requireString(b, "sendId");
-    if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
-    const out = await agents.chat(params.name!, text, sendId);
-    scheduleHot();
-    return json(out);
-  })
 
   // ----- scheduled sessions (src/core/scheduler.ts)
   .add("POST", "/api/schedules", async ({ req }) => {
     const b = await readBody(req);
     const spec = (b.spec && typeof b.spec === "object" ? b.spec : {}) as Record<string, unknown>;
-    const agent = optionalString(b, "agent");
     const s = await scheduler.create({
       when: requireString(b, "when"),
       label: optionalString(b, "label") ?? null,
       spec: {
-        // One that speaks to an agent starts nothing: its agent's main says where and on what.
-        provider: agent && spec.provider === undefined ? "claude" : provider(spec.provider),
+        provider: provider(spec.provider),
         cwd: optionalString(spec, "cwd"),
         repoId: optionalString(spec, "repoId"),
         worktree: spec.worktree === true,
@@ -1380,7 +1323,6 @@ const router = new Router(mapError)
         scope: scopeOf(spec),
       },
       noteCmd: noteCmdOf(b),
-      agent,
     });
     return json(s, 201);
   })
@@ -2002,7 +1944,6 @@ export async function startServer(): Promise<void> {
     }
     scheduler.stop();
     waits.stop();
-    agents.stopAll();
     extensions.stopAll();
     org.stop();
     fleet.stop();
@@ -2149,7 +2090,6 @@ export async function startServer(): Promise<void> {
   phase("first pass");
   scheduler.start();
   waits.start();
-  agents.start();
   extensions.start();
   cards.start();
   org.start();

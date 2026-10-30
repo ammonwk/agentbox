@@ -16,5 +16,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src", "web/src", "bin", "agents", "sdk"]
+  "include": ["src", "web/src", "bin", "sdk"]
 }

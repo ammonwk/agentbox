@@ -1,6 +1,0 @@
-{
-  "name": "caelus",
-  "title": "Caelus",
-  "description": "Prepares releases and follows checks, reviews, deployments and health through to a verified outcome.",
-  "main": { "start": { "provider": "claude" }, "instructions": "MAIN.md" }
-}

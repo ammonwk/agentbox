@@ -1670,7 +1670,7 @@ export interface Schedule {
   /** When it last started a session or said something to its agent. A time
    *  its note command had nothing to say is not one. */
   lastRunAt: number | null;
-  /** The session the last start made, or the agent's main it last spoke to. */
+  /** The session the last start made. */
   lastSessionId: string | null;
   lastError: string | null;
   /**
@@ -1681,13 +1681,6 @@ export interface Schedule {
    * starts.
    */
   noteCmd: string | null;
-  /**
-   * The agent it speaks to: each time it comes due, the note (or, with no note
-   * command, the prompt) is said to that agent's main conversation instead of
-   * starting a session (src/core/agents.ts `say`). While the main is mid-turn
-   * or showing a prompt, that time is skipped.
-   */
-  agent: string | null;
 }
 
 // ----------------------------------------------------------------- health
@@ -1787,114 +1780,3 @@ export interface ExtensionInfo {
   lastExit: { code: number | null; at: number } | null;
 }
 
-/** An agent as the Agents page shows it (`GET /api/agents`, src/core/agents.ts). */
-/** The pictures an agent's manifest can name (`icon`), for when no picture was uploaded. */
-export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as const;
-export type AgentIcon = (typeof AGENT_ICONS)[number];
-
-export interface AgentInfo {
-  name: string;
-  title: string;
-  description: string;
-  icon: AgentIcon | null;
-  /** A picture uploaded on its Settings tab (`/api/agents/:name/avatar`), and when. */
-  avatar: { at: number } | null;
-  /** The registered repos it shows under, from its manifest's `projects`; null: every project. */
-  projects: string[] | null;
-  /** Where its `agent.json` and code are. */
-  dir: string;
-  enabled: boolean;
-  /** Why its manifest cannot be read, when it cannot. */
-  error: string | null;
-  /** Its main conversation now, following handovers. */
-  main: string | null;
-  /** The sessions that were its main before, newest first. */
-  previous: string[];
-  /** No main yet, and the manifest says how agentbox starts one on the first message. */
-  canStart: boolean;
-  /** It has a program (run, or a url) that answers for its page. */
-  hasPage: boolean;
-  /** The program agentbox keeps running for it, when its manifest has `run`. */
-  process: {
-    state: "running" | "starting" | "backoff" | "stopped";
-    pid: number | null;
-    since: number | null;
-    restarts: number;
-    lastExit: { code: number | null; at: number } | null;
-  } | null;
-  createdAt: number;
-}
-
-/** What an agent's page is made of: its program answers `GET /agentbox/view` with this (docs/agents.md). */
-export interface AgentView {
-  title?: string;
-  /** Its tabs, beside Chat; the page asks for one with `?tab=`. */
-  tabs?: { id: string; title: string; badge?: number | string }[];
-  blocks: AgentBlock[];
-  /** Ask again after this many seconds (at least 2). */
-  refresh?: number;
-}
-
-export interface AgentAction {
-  id: string;
-  label: string;
-  style?: "primary" | "danger";
-  /** Asked before the action is sent. */
-  confirm?: string;
-  /** Sent with the action, beside the form's values. */
-  values?: Record<string, unknown>;
-}
-
-export type AgentField =
-  | { name: string; label: string; kind: "text" | "textarea"; value?: string; placeholder?: string; rows?: number }
-  | { name: string; label: string; kind: "select"; value?: string; options: { value: string; label: string }[] }
-  | { name: string; label: string; kind: "checkbox"; value?: boolean };
-
-export type AgentStatus = "ok" | "warn" | "bad" | "busy" | "idle";
-
-/** One entry of a `split` block's list, and what its pane shows when chosen. */
-export interface AgentPane {
-  id: string;
-  title: string;
-  subtitle?: string;
-  /** Shown at the row's right: a count, a size. */
-  badge?: string | number;
-  status?: AgentStatus;
-  blocks: AgentBlock[];
-}
-
-export type AgentBlock =
-  | { type: "heading"; text: string }
-  | { type: "markdown"; text: string }
-  | { type: "fields"; items: { label: string; value: string }[] }
-  | { type: "divider" }
-  | { type: "actions"; actions: AgentAction[] }
-  | { type: "form"; id: string; fields: AgentField[]; actions: AgentAction[] }
-  /** Text shown exactly as given, in a fixed-width font: whitespace, blank
-   *  lines and markup characters kept. It scrolls past `maxHeight` pixels
-   *  (default 480), and has a copy button and a wrap toggle (`wrap`, default on). */
-  | { type: "text"; text: string; title?: string; wrap?: boolean; maxHeight?: number }
-  /** A list beside the pane of the entry chosen in it, as on the Skills page;
-   *  one at a time on a phone. The choice is the browser's, kept across
-   *  refreshes by `id`; `selected` is the first one shown. */
-  | { type: "split"; id: string; title?: string; items: AgentPane[]; selected?: string }
-  /** Alternative views of one thing, chosen with a segmented control in the
-   *  browser and kept across refreshes by `id`. */
-  | { type: "switch"; id: string; options: { id: string; label: string; blocks: AgentBlock[] }[]; selected?: string }
-  | {
-      type: "item";
-      id?: string;
-      title: string;
-      subtitle?: string;
-      status?: AgentStatus;
-      /** Markdown. */
-      body?: string;
-      /** Session ids, linked to their pages. */
-      sessions?: string[];
-      links?: { label: string; url: string }[];
-      actions?: AgentAction[];
-      children?: AgentBlock[];
-      /** Folds under its header, which opens and closes it: `true` starts it
-       *  folded, `false` open. Kept across refreshes by `id`. */
-      collapsed?: boolean;
-    };

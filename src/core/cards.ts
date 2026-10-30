@@ -13,8 +13,8 @@
  * taken back; once typed it cannot. When the asking session is gone or
  * closed the answer waits on the card (`unread`), for whichever session asks
  * (`agentbox card list --answered --unread`) and says it has it (`card ack`).
- * An agent whose main conversation is replaced gives the old one's cards
- * to the new one (`moveCards`), as it does its children.
+ * A session handed over to a successor (`agentbox handover`) gives it its
+ * cards (`moveCards`), as it does its children.
  *
  * Cards are the user's, not a conversation, so they live in the database.
  * A decision's default and its time are the asker's to act on; agentbox only

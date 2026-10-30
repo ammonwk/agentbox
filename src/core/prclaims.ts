@@ -16,8 +16,8 @@
  * Only a live session holds anything (running, waiting or asking): a claim
  * lapses when its session stops or closes, with nothing to clean up, and a
  * live session that asks next gets the PR. A claim is refused while another
- * live session holds the PR, and the refusal names it. When an agent's main
- * conversation is replaced (agents.ts) the claims go to the successor, as its
+ * live session holds the PR, and the refusal names it. When a session is
+ * handed over (`agentbox handover`) the claims go to the successor, as its
  * children and cards do.
  */
 

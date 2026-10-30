@@ -6,7 +6,7 @@ import { closeDb, getSessionRecord, getWait, insertAccount, insertSessionRecord,
 import { Fleet, type Runtime } from "../fleet";
 import { claudeAdapter } from "../providers/claude";
 import { markScheduled } from "../schedule-sessions";
-import { Scheduler, type AgentsPort } from "../scheduler";
+import { Scheduler } from "../scheduler";
 import { Waits } from "../waits";
 import type { PaneInfo } from "../tmux";
 
@@ -63,6 +63,6 @@ test("a parked scheduled session told its wait ended is not closed as finished b
   await fleet.tick();
   expect(fleet.get("nightly")).toMatchObject({ host: "tmux", status: "waiting", waits: [] });
 
-  await new Scheduler(fleet, () => ({}) as AgentsPort, () => {}, () => now).tick();
+  await new Scheduler(fleet, () => {}, () => now).tick();
   expect(getSessionRecord("nightly")!.archivedAt).toBeNull();
 });

@@ -38,7 +38,6 @@ import {
   getRepoById,
   getSessionRecord,
   getSettings,
-  agentMains,
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
@@ -1581,10 +1580,9 @@ export class Fleet extends EventEmitter {
     if (now < this.nextParkCheck) return;
     this.nextParkCheck = now + PARK_CHECK_MS;
     const idleMs = idleMin * 60_000;
-    // An agent's main conversation, or one you pinned: its next message is coming.
-    const noted = new Set(agentMains().map((id) => this.heir(id)));
-    // Done: parked within minutes, warm or not (park.ts `DONE_IDLE_MS`).
-    const done = (v: Session) => this.liveStatus.get(v.id) === "waiting" && endedDone(v.lastMessage) && !noted.has(v.id) && v.pinOrder === null;
+    // Done: parked within minutes, warm or not (park.ts `DONE_IDLE_MS`); not
+    // one you pinned (an extension's conversation is pinned): its next message is coming.
+    const done = (v: Session) => this.liveStatus.get(v.id) === "waiting" && endedDone(v.lastMessage) && v.pinOrder === null;
     // A cache that outlives the process: parked after the provider's own time.
     const survives = (v: Session) => this.adapter(v.provider).parkIdleMs;
     const idleOf = (v: Session) => Math.min(idleMs, done(v) ? DONE_IDLE_MS : (survives(v) ?? idleMs));

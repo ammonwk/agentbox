@@ -484,6 +484,13 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // 39 — listOpenWaits' untold branch, which scanned every wait ever made.
   `CREATE INDEX IF NOT EXISTS waits_untold ON waits (told_at);`,
+  // 40 — agents are gone: a program of yours is an extension, outside agentbox
+  // (docs/extensions.md), so a schedule that spoke to one goes with them.
+  `
+  DROP TABLE IF EXISTS agents;
+  DELETE FROM schedules WHERE agent IS NOT NULL;
+  ALTER TABLE schedules DROP COLUMN agent;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -939,7 +946,7 @@ export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WA
 type ScheduleRow = {
   id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
   created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
-  note_cmd: string | null; agent: string | null;
+  note_cmd: string | null;
 };
 
 function rowToSchedule(r: ScheduleRow): Schedule {
@@ -955,7 +962,6 @@ function rowToSchedule(r: ScheduleRow): Schedule {
     lastSessionId: r.last_session_id,
     lastError: r.last_error,
     noteCmd: r.note_cmd,
-    agent: r.agent,
   };
 }
 
@@ -970,7 +976,6 @@ const SCHEDULE_COLUMNS = {
   lastSessionId: "last_session_id",
   lastError: "last_error",
   noteCmd: "note_cmd",
-  agent: "agent",
 } as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
 
 type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;
@@ -980,12 +985,6 @@ function scheduleToSql(key: ScheduleKey, value: unknown): string | number | null
   if (key === "rule" || key === "spec") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
-}
-
-/** The main conversations of the enabled agents (src/core/agents.ts), as last recorded:
- *  follow each with `Fleet.heir` for the one it is now. */
-export function agentMains(): string[] {
-  return (getDb().query("SELECT main FROM agents WHERE enabled = 1 AND main IS NOT NULL").all() as { main: string }[]).map((r) => r.main);
 }
 
 /** The soonest first; those with nothing coming last. */

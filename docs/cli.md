@@ -133,17 +133,13 @@ why). Arming the same wait twice is one wait.
                                     # Prints the id and when it was understood to start.
                                     # --fallback omp,codex: started on those, in order,
                                     # when --provider has no account with room
-    agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' [--to AGENT] 'prompt'
-                                    # a recurring one that speaks only when there is
-                                    # something to say. Each time it comes due the
-                                    # command runs in --cwd (2 minutes at most); what it
-                                    # prints goes before the prompt, and when it prints
-                                    # nothing, nothing happens. --to says it to that
-                                    # agent's main conversation instead of starting a
-                                    # session, and skips the time while the main is
-                                    # mid-turn; the command then runs in the agent's
-                                    # directory. Either flag works without the other
-    agentbox schedules              # what is set to start: id  in  when · provider or agent · title,
+    agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' 'prompt'
+                                    # a recurring one that starts a session only when
+                                    # there is something to say. Each time it comes due
+                                    # the command runs in --cwd (2 minutes at most); what
+                                    # it prints goes before the prompt, and when it prints
+                                    # nothing, nothing happens
+    agentbox schedules              # what is set to start: id  in  when · provider · title,
                                     # and its command and its last note
     agentbox unschedule <id>...     # it will not start
     agentbox card add --kind decision --title T --short S [--long-file F] [--recommend R] [--pr URL]
@@ -178,13 +174,13 @@ why). Arming the same wait twice is one wait.
     agentbox org default org|personal
     agentbox org share <account> | unshare <account>
 
-## Agents (programs that run on agentbox: docs/agents.md)
+## Extensions (your user's programs that run on agentbox: docs/extensions.md)
 
-    agentbox agent ls          # each one: its program, its main conversation, its directory
-    agentbox agent call <name> <action> --json <file>   # what an agent's prompt tells you
-                                    # to run: its answer is JSON; it knows which session called
-    agentbox agent view <name> [--tab t]   # its page, as JSON
-    agentbox agent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox ext ls            # each one, its program's state and its directory
+    agentbox ext call <name> <path> [--json <file>]   # what an extension's prompt tells you
+                                    # to run: its answer; it knows which session called
+    agentbox ext log <name>    # the end of its program's output
+    agentbox ext add <dir>     # link one in (a person's call: do it only when asked)
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
 
