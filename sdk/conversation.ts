@@ -121,10 +121,10 @@ export function conversation(opts: Options) {
         const s = await agentbox.start({ ...opts.start, prompt: `${instructions}${follows}[via agentbox ext ${me.name}] ${text}` });
         await agentbox.pin(s.id);
         write({ main: s.id, previous: last ? [last.id, ...st.previous.filter((x) => x !== last.id)].slice(0, 200) : st.previous });
-        if (last && last.status !== "closed") {
+        if (last) {
           await agentbox.pin(last.id, null);
           // It is idle (a busy one is not replaced), so closing it cuts nothing short.
-          await agentbox.handover(last.id, s.id, true);
+          await agentbox.handover(last.id, s.id, last.status !== "closed");
         }
         return { session: s.id, started: true };
       } finally {
