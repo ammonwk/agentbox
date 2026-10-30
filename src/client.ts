@@ -31,13 +31,18 @@ export class ApiError extends Error {
 
 export type Api = <T>(method: string, path: string, body?: unknown) => Promise<T>;
 
-export function apiClient(base: string): Api {
+/** `fetch` to the server at `base`, over its Unix socket when `base` is this
+ *  machine's server and the socket is there (`serverSocket`). */
+export function serverFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
   const sock = base === serverBase() ? serverSocket() : null;
+  return fetch(`${base}${path}`, { ...init, unix: sock && existsSync(sock) ? sock : undefined });
+}
+
+export function apiClient(base: string): Api {
   return async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     let res: Response;
     try {
-      res = await fetch(`${base}${path}`, {
-        unix: sock && existsSync(sock) ? sock : undefined,
+      res = await serverFetch(base, path, {
         method,
         headers: { "content-type": "application/json", "x-agentbox": "1", ...sessionHeaders() },
         body: body === undefined ? undefined : JSON.stringify(body),

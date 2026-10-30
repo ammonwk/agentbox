@@ -16,7 +16,7 @@ import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, packageRoot, webDi
 import { listRepos, listAccounts } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
-import { ApiError, apiClient, serverBase } from "../client";
+import { ApiError, apiClient, serverBase, serverFetch } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
 import { fixPwaDesktop } from "../core/pwa";
 import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
@@ -56,7 +56,7 @@ const SERVER_WEIGHT = ["CPUWeight=2000", "IOWeight=1000"];
 
 async function reachable(): Promise<boolean> {
   try {
-    const r = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) });
+    const r = await serverFetch(BASE, "/api/health", { signal: AbortSignal.timeout(1500) });
     return r.ok;
   } catch {
     return false;
@@ -623,7 +623,7 @@ async function restartServer(commit: string): Promise<void> {
   else throw new Error("no agentbox service is installed here; restart the server yourself");
   for (let i = 0; i < 120; i++) {
     await Bun.sleep(500);
-    const health = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) }).then((r) => r.json()).catch(() => null);
+    const health = await serverFetch(BASE, "/api/health", { signal: AbortSignal.timeout(1500) }).then((r) => r.json()).catch(() => null);
     const running = (health?.data ?? health)?.revision?.commit as string | undefined;
     if (running === commit) {
       console.log(`the server is up on ${commit.slice(0, 8)}`);
