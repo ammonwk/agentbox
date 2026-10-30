@@ -9,19 +9,20 @@ import { Icon } from "../../components";
 
 export function FindBar({
   sessionId,
-  initial,
+  q,
+  onQ,
   start,
   onGo,
   onClose,
 }: {
   sessionId: string;
-  initial: string;
+  q: string;
+  onQ: (q: string) => void;
   /** The hit already shown (the search that led here opened it). */
   start?: string;
   onGo: (event: string) => void;
   onClose: () => void;
 }) {
-  const [q, setQ] = useState(initial);
   const [hits, setHits] = useState<string[] | null>(null);
   const [i, setI] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -73,7 +74,7 @@ export function FindBar({
         value={q}
         placeholder="Find in this conversation"
         aria-label="Find in this conversation"
-        onChange={(e) => setQ(e.target.value)}
+        onChange={(e) => onQ(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();

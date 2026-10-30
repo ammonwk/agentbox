@@ -632,7 +632,8 @@ export function Timeline({ session }: { session: Session }) {
         <FindBar
           key={find.n}
           sessionId={session.id}
-          initial={find.q}
+          q={find.q}
+          onQ={(q) => setFind((f) => f && { ...f, q })}
           start={find.start}
           onGo={(id) => {
             setFound(id);
