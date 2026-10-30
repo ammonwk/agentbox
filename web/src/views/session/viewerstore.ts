@@ -1,5 +1,6 @@
 import { createContext, useSyncExternalStore } from "react";
 import { api } from "../../api";
+import { NOWHERE, type AgentPlaces } from "../../lib/timeline";
 
 /** A file in the viewer (FileViewer.tsx): the session whose directory a
  *  relative path is read in, the path as it was written, `:line` and all,
@@ -59,10 +60,10 @@ export function useViewerStack(): ViewerEntry[] {
  *  read beside it, not in the session's directory. */
 export const FileBase = createContext<string | null>(null);
 
-/** Where the agent was when it wrote the text being read: the directories of
- *  its last few `cd`s (`agentDirs`), where a relative path it names is looked
- *  for before the session's own directory. */
-export const AgentDir = createContext<readonly string[]>([]);
+/** Where the agent had been when it wrote the text being read
+ *  (`agentPlaces`): a relative path it names is looked for there
+ *  (`placesFor`) before the session's own directory. */
+export const AgentDir = createContext<AgentPlaces>(NOWHERE);
 
 export function inBase(base: string | null, path: string): string {
   if (!base || /^(?:\/|~(?:\/|$)|file:)/.test(path)) return path;

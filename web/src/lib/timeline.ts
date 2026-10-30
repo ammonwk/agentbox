@@ -2,6 +2,7 @@
 
 import type { Btw, TimelineEvent } from "../../../src/core/types";
 import { sendOf, type SendCall } from "./sendtool";
+import { localFileLink } from "../../../src/core/filelinks";
 
 /**
  * Merge incoming events into what is held, keyed by `id`.
@@ -240,25 +241,53 @@ export function firstLine(text: string, max = 140): string {
   return line.length > max ? line.slice(0, max - 1) + "…" : line;
 }
 
+/** Where the agent had been when it wrote an event: the directories it
+ *  `cd`'d into (or a call's `workdir`) and the files its tools read or wrote,
+ *  each latest first. */
+export interface AgentPlaces {
+  dirs: readonly string[];
+  files: readonly string[];
+}
+
+export const NOWHERE: AgentPlaces = { dirs: [], files: [] };
+
 /**
- * Where the agent was when it wrote each event, by id: the directories of its
- * last few `cd`s (or a call's `workdir`) before it, the latest first. A CLI
- * may put its shell back after each call (Claude does outside its working
- * directories, so its transcript's `cwd` never moves), yet a relative path
- * the agent writes next is still one it was looking at.
+ * `AgentPlaces` before each event, by id. A CLI may put its shell back after
+ * each call (Claude does outside its working directories, so its transcript's
+ * `cwd` never moves), yet a relative path the agent writes next is still one
+ * it was looking at.
  */
-export function agentDirs(events: readonly TimelineEvent[]): ReadonlyMap<string, readonly string[]> {
-  const m = new Map<string, readonly string[]>();
-  let dirs: string[] = [];
+export function agentPlaces(events: readonly TimelineEvent[]): ReadonlyMap<string, AgentPlaces> {
+  const m = new Map<string, AgentPlaces>();
+  let at: AgentPlaces = { dirs: [], files: [] };
   for (const ev of events) {
     if (ev.kind !== "tool") {
-      if (dirs.length) m.set(ev.id, dirs);
+      if (at.dirs.length || at.files.length) m.set(ev.id, at);
       continue;
     }
-    const dir = dirAfter(ev.input, dirs[0] ?? null);
-    if (dir && dir !== dirs[0]) dirs = [dir, ...dirs.filter((d) => d !== dir)].slice(0, 4);
+    const dir = dirAfter(ev.input, at.dirs[0] ?? null);
+    const dirs = dir && dir !== at.dirs[0] ? toFront(at.dirs, [dir]) : at.dirs;
+    const touched = filesIn(ev.input, dirs[0] ?? null);
+    const files = touched.length ? toFront(at.files, touched) : at.files;
+    if (dirs !== at.dirs || files !== at.files) at = { dirs, files };
   }
   return m;
+}
+
+const toFront = (list: readonly string[], add: readonly string[]): string[] => [...add, ...list.filter((x) => !add.includes(x))];
+
+/** Equal for two readings of the same places: a list only grows, or moves an
+ *  entry to its front, so its length and first entry tell its readings apart. */
+export const placesKey = (p: AgentPlaces | undefined): string =>
+  p ? `${p.dirs.length}:${p.dirs[0] ?? ""}|${p.files.length}:${p.files[0] ?? ""}` : "";
+
+/** The directories to read a relative `ref` in, best first: beside a file the
+ *  agent touched whose path ends in it, then where it `cd`'d. */
+export function placesFor(p: AgentPlaces, ref: string): readonly string[] {
+  const path = localFileLink(ref, true)?.path.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  if (!path || /^[/~]/.test(path)) return p.dirs;
+  const beside = p.files.filter((f) => f.endsWith(`/${path}`)).map((f) => f.slice(0, -path.length - 1));
+  return beside.length ? [...new Set([...beside, ...p.dirs])] : p.dirs;
 }
 
 /** A `cd` that starts a command, or follows `&&`, `;`, `|` or `(`. */
@@ -280,4 +309,24 @@ function dirAfter(input: string | undefined, dir: string | null): string | null 
   const cmd = [a.command, a.cmd].map((c) => (Array.isArray(c) ? c.join(" ") : c)).find((c) => typeof c === "string");
   if (cmd) for (const m of cmd.matchAll(CD)) into(m[1] ?? m[2] ?? m[3]);
   return dir;
+}
+
+/** A patch names each file it changes: `*** Update File: <path>`. */
+const PATCHED = /\*\*\* (?:Add|Update|Delete) File: ([^\s"'`\\]+)/g;
+
+/** The files a call read or wrote, as it named them; a relative one is taken
+ *  from `dir`, where the agent was. */
+function filesIn(input: string | undefined, dir: string | null): string[] {
+  if (!input) return [];
+  const out = [...input.matchAll(PATCHED)].map((m) => m[1]!);
+  try {
+    const a = JSON.parse(input) as Record<string, unknown>;
+    for (const k of ["file_path", "notebook_path", "path"]) {
+      const f = a?.[k];
+      if (typeof f === "string" && f) out.push(f);
+    }
+  } catch {
+    /* a call whose input is not JSON names files only in a patch */
+  }
+  return [...new Set(out.map((f) => (/^[/~]/.test(f) || !dir ? f : `${dir}/${f}`)))];
 }

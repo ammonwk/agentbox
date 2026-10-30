@@ -4,7 +4,7 @@ import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { modelName } from "../../lib/newsession";
 import { Button, Empty, Icon, Spinner } from "../../components";
-import { agentDirs, firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
+import { agentPlaces, firstLine, NOWHERE, placesKey, groupTimeline, rowEventIds, traceTurns, withBtw, type AgentPlaces, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
@@ -176,7 +176,7 @@ export function Timeline({ session }: { session: Session }) {
   // Ticks once a second while the turn runs, so live durations advance.
   const now = useNow(session.status === "running");
   const thinkDur = useThinkDur(events);
-  const dirs = useMemo(() => agentDirs(events), [events]);
+  const whereAt = useMemo(() => agentPlaces(events), [events]);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const linked = useLinkedAt(session.id);
@@ -530,7 +530,7 @@ export function Timeline({ session }: { session: Session }) {
         <time dateTime={new Date(r.at).toISOString()}>{fmtHourMin(r.at)}</time>
       </div>
     ) : (
-      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} dirs={dirs.get(r.event.id)?.join("\n")} />
+      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} places={whereAt.get(r.event.id)} />
     );
 
   // Just started, and the CLI has not written its first turn: what you asked
@@ -685,7 +685,7 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
   const rows = useMemo(() => groupTimeline(events), [events]);
   const now = useNow(live);
   const thinkDur = useThinkDur(events);
-  const dirs = useMemo(() => agentDirs(events), [events]);
+  const whereAt = useMemo(() => agentPlaces(events), [events]);
   return (
     <div className="tl-stream">
       {rows.map((r) =>
@@ -708,7 +708,7 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
             </Clamp>
           </div>
         ) : r.type === "event" ? (
-          <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} dirs={dirs.get(r.event.id)?.join("\n")} />
+          <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} places={whereAt.get(r.event.id)} />
         ) : null,
       )}
     </div>
@@ -772,16 +772,20 @@ function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, numb
   }, [events]);
 }
 
-/** `dirs` comes joined by newlines, so a memoized row stays equal while the
- *  timeline's directories are worked out afresh with each event. */
-const EventRow = memo(function EventRow({ ev, dur, dirs }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; dirs?: string }) {
-  const value = useMemo(() => (dirs ? dirs.split("\n") : []), [dirs]);
-  return (
-    <AgentDir.Provider value={value}>
-      <EventBody ev={ev} dur={dur} />
-    </AgentDir.Provider>
-  );
-});
+type EventRowProps = { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; places?: AgentPlaces };
+
+/** `places` is compared by `placesKey`, so a memoized row stays equal while
+ *  the timeline's places are worked out afresh with each event. */
+const EventRow = memo(
+  function EventRow({ ev, dur, places }: EventRowProps) {
+    return (
+      <AgentDir.Provider value={places ?? NOWHERE}>
+        <EventBody ev={ev} dur={dur} />
+      </AgentDir.Provider>
+    );
+  },
+  (a: EventRowProps, b: EventRowProps) => a.ev === b.ev && a.dur === b.dur && placesKey(a.places) === placesKey(b.places),
+);
 
 function EventBody({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
   switch (ev.kind) {
