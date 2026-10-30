@@ -320,7 +320,6 @@ async function refreshSlow(): Promise<void> {
   const skills = listSkills(skillRoots(localRepoDirs(repos)));
   slow.skills = skills.skills;
   slow.skillWarnings = skills.warnings;
-  await detectProviders();
   // From the database: sessions come and go, and which PR is whose with them.
   slow.prs = openPrs(fleet.sessions());
   slow.tmuxMissing = !tmux.tmuxVersion();
@@ -2101,7 +2100,9 @@ export async function startServer(): Promise<void> {
   // otherwise carry the slow inputs' defaults — a checklist that says tmux is
   // missing on a machine that has it, until the first refresh lands a minute
   // later. Beside the first pass, not after it: each probe is a process to wait on.
-  const firstSlow = refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
+  // Which CLIs are installed is asked once (`omp --version` alone is a second
+  // of CPU); Re-check on the health card asks again.
+  const firstSlow = Promise.all([refreshSlow(), detectProviders()]).catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
 
   await fleet.ready;
   phase("first pass");
