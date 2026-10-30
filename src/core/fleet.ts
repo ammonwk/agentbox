@@ -2738,6 +2738,26 @@ export class Fleet extends EventEmitter {
     return this.readerOf(id).timeline({ before, limit, via });
   }
 
+  /** A page read forward from `after` (a page's `after`, or "" for the start). */
+  timelineAfter(id: string, after: string, limit: number, via: string | null = null): Promise<TimelinePage> {
+    return this.readerOf(id).timeline({ after, limit, via });
+  }
+
+  /** About `limit` events with `event` among them, a third of them before it:
+   *  the conversation opened at that message, wherever it is, as cheaply as
+   *  its newest page. Its `before` and `after` page on from either end. */
+  async timelineAround(id: string, event: string, limit: number, via: string | null = null): Promise<TimelinePage> {
+    const reader = this.readerOf(id);
+    const at = await reader.locate(event);
+    if (at === null) throw new FleetError(404, "that message is not in this conversation");
+    const older = await reader.timeline({ before: at, limit: Math.max(1, Math.floor(limit / 3)), via });
+    const newer = await reader.timeline({ after: at, limit: Math.max(1, limit - older.events.length), via });
+    if (!newer.events.some((e) => e.id === event)) throw new FleetError(404, "that message is not in this conversation as it stands");
+    const page: TimelinePage = { events: [...older.events, ...newer.events], before: older.before, after: newer.after ?? null, cursor: newer.cursor };
+    if (via) page.via = via;
+    return page;
+  }
+
   since(id: string, cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
     return this.readerOf(id).since(cursor);
   }

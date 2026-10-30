@@ -215,16 +215,18 @@ export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
 
 /**
  * Side questions placed among the rows by when they were asked, after the
- * row they followed. One older than everything loaded waits for the page it
- * belongs on, unless `all` (the start of the conversation is loaded).
+ * row they followed. One outside what is loaded waits for the page it
+ * belongs on: older than all of it, unless `all` (the start of the
+ * conversation is loaded); newer, unless `end` (it runs to the newest).
  */
-export function withBtw(rows: TimelineRow[], items: readonly Btw[], all: boolean): TimelineRow[] {
+export function withBtw(rows: TimelineRow[], items: readonly Btw[], all: boolean, end: boolean): TimelineRow[] {
   const live = items.filter((b) => b.status !== "dismissed");
   if (live.length === 0) return rows;
   const from = rows.length && !all ? rowAt(rows[0]!) : -Infinity;
+  const to = rows.length && !end ? rowAt(rows[rows.length - 1]!) : Infinity;
   const out = [...rows];
   for (const btw of live) {
-    if (btw.askedAt < from) continue;
+    if (btw.askedAt < from || btw.askedAt > to) continue;
     let i = out.length;
     while (i > 0 && rowAt(out[i - 1]!) > btw.askedAt) i--;
     out.splice(i, 0, { type: "btw", btw });

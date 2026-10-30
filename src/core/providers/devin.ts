@@ -529,9 +529,35 @@ class DevinReader implements TranscriptReader {
     return { events, before: start > 0 && events.length > 0 ? events[0]!.id : null, cursor: this.cursor() };
   }
 
-  async timeline(opts: { before?: string | null; limit: number }): Promise<TimelinePage> {
+  async timeline(opts: { before?: string | null; after?: string; limit: number }): Promise<TimelinePage> {
     this.pull();
-    return this.page(opts.before ?? null, opts.limit);
+    return opts.after !== undefined ? this.forward(opts.after, opts.limit) : this.page(opts.before ?? null, opts.limit);
+  }
+
+  /** An event id is its position: the place just before it (its node's, in a forest). */
+  async locate(id: string): Promise<string | null> {
+    this.pull();
+    if (this.forest) return this.linkIndex(id) >= 0 && this.forestEvents(this.linkIndex(id), this.linkIndex(id) + 1).some((e) => e.id === id) ? id : null;
+    return this.events.some((e) => e.id === id) ? id : null;
+  }
+
+  /** From the event (or node) `after` names ("" is the start) on, `limit` events. */
+  private forward(after: string, limit: number): TimelinePage {
+    if (this.forest) {
+      let k = after ? Math.max(0, this.linkIndex(after)) : 0;
+      const from = k;
+      let events: TimelineEvent[] = [];
+      while (k < this.chain.length && events.length < limit) {
+        const to = Math.min(this.chain.length, k + Math.max(1, limit - events.length));
+        events = [...events, ...this.forestEvents(k, to)];
+        k = to;
+      }
+      return { events, before: from > 0 && events[0] ? events[0].id : null, after: k < this.chain.length ? `n${this.chain[k]!.node.id}` : null, cursor: this.cursor() };
+    }
+    const k = after ? Math.max(0, this.events.findIndex((e) => e.id === after)) : 0;
+    const events = this.events.slice(k, k + limit);
+    const next = this.events[k + limit];
+    return { events, before: k > 0 && events[0] ? events[0].id : null, after: next ? next.id : null, cursor: this.cursor() };
   }
 
   /** The export is rewritten whole each turn, so the cursor is an event id

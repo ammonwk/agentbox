@@ -8,11 +8,10 @@
  * read here as they were, and can be carried on from.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ProviderId, Session, TimelineEvent } from "../../../../src/core/types";
-import { api, OLDER_PAGE, type TimelineState } from "../../api";
+import { api } from "../../api";
 import { Button, Icon } from "../../components";
-import { mergeTimeline } from "../../lib/timeline";
 import { go } from "../../route";
 import { useDismiss, useFloating } from "../newsession/popover";
 
@@ -66,55 +65,6 @@ export function keepEdit(sessionId: string, edit: { ev: string; text: string } |
   } catch {
     /* private mode: the edit lasts while the session is open */
   }
-}
-
-/** The conversation through one version of a message (`via`), paged from the
- *  server; nothing follows it live, since it is not where the session is. */
-export function useVersionTimeline(sessionId: string, via: string | null): TimelineState & { loadOlder: (limit?: number) => void } {
-  const [st, setSt] = useState<TimelineState>({ events: [], ready: false, loadingOlder: false, exhausted: false, error: null });
-  const before = useRef<string | null>(null);
-  const busy = useRef(false);
-  const key = useRef("");
-  useEffect(() => {
-    key.current = `${sessionId}\n${via}`;
-    setSt({ events: [], ready: false, loadingOlder: false, exhausted: false, error: null });
-    if (!via) return;
-    const mine = key.current;
-    api
-      .timeline(sessionId, { via, limit: 200 })
-      .then((page) => {
-        if (key.current !== mine) return;
-        before.current = page.before;
-        setSt({ events: mergeTimeline([], page.events), ready: true, loadingOlder: false, exhausted: page.before === null, error: null });
-      })
-      .catch((e: unknown) => {
-        if (key.current === mine) setSt((s) => ({ ...s, ready: true, error: e instanceof Error ? e.message : String(e) }));
-      });
-  }, [sessionId, via]);
-
-  const loadOlder = useCallback(
-    (limit: number = OLDER_PAGE) => {
-      if (!via || busy.current || before.current === null) return;
-      const mine = key.current;
-      busy.current = true;
-      setSt((s) => ({ ...s, loadingOlder: true, error: null }));
-      api
-        .timeline(sessionId, { via, before: before.current, limit })
-        .then((page) => {
-          if (key.current !== mine) return;
-          before.current = page.before;
-          setSt((s) => ({ ...s, events: mergeTimeline(s.events, page.events, "prepend"), loadingOlder: false, exhausted: page.before === null || page.events.length === 0 }));
-        })
-        .catch((e: unknown) => {
-          if (key.current === mine) setSt((s) => ({ ...s, loadingOlder: false, error: e instanceof Error ? e.message : String(e) }));
-        })
-        .finally(() => {
-          busy.current = false;
-        });
-    },
-    [sessionId, via],
-  );
-  return { ...st, loadOlder };
 }
 
 /** `‹ 2/3 ›` under a message with versions. */

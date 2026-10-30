@@ -776,6 +776,10 @@ export function codexFormat(ref: Pick<TranscriptRef, "agentSessionId">, titleOf?
     facts: () => fold.facts(),
     links: codexLinks,
     pieces: (v, i) => codexPieces(v, i, fold),
+    locate: (id) => {
+      const r = /^r(\d+)/.exec(id);
+      return r ? { index: Number(r[1]) } : null;
+    },
     state: () => saveFields(fold, ["ref"]),
     restore: (s) => loadFields(fold, s),
   };

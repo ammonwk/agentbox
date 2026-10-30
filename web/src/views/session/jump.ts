@@ -1,11 +1,13 @@
-/** A message to show in the Timeline once it opens: the rail beside the
- *  terminal hands over what the terminal could not scroll to, and a search
- *  hit the message it was found in. */
+/** What to show in the Timeline once it opens: the rail beside the terminal
+ *  hands over a message the terminal could not scroll to, and a search hit
+ *  the words to find (its message is in the link: `Route.at`). */
 
 export interface Jump {
-  turnId: string;
+  turnId?: string;
   /** Why it is shown here rather than where it was clicked. */
   note?: string;
+  /** Words to find in the conversation, from a search that led here. */
+  find?: string;
 }
 
 const pending = new Map<string, Jump>();

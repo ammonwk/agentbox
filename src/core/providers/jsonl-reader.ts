@@ -47,6 +47,9 @@ export interface TranscriptFormat {
   branches?(): Branches;
   /** The id of the record a branch ends at, to point the conversation at it. */
   leafId?(leaf: number): string | null;
+  /** Where an event's record is: its index, when the id says it, or text
+   *  only its record's line holds. Null when the id is none of this format's. */
+  locate?(id: string): { index: number } | { text: string } | null;
   /** The fold's running state (extras included), for `restore` in a later
    *  process. A format without it is read from the start on every restart. */
   state?(): unknown;
@@ -391,15 +394,65 @@ export class JsonlTranscriptReader implements TranscriptReader {
     return { events, start: Math.min(start, end) };
   }
 
-  async timeline(opts: { before?: string | null; limit: number; via?: string | null }): Promise<TimelinePage> {
+  /** The oldest `limit` events from record `start` on (whole records), and
+   *  the record after the last one read. */
+  private forward(start: number, limit: number, path: Path): { events: TimelineEvent[]; end: number } {
+    const loaded = new Map<number, any>();
+    const n = this.tail.recordCount;
+    const events: TimelineEvent[] = [];
+    let end = start;
+    const chunk = Math.max(64, limit * 2);
+    while (end < n && events.length < limit) {
+      for (const g of this.project(end, Math.min(n, end + chunk), loaded, path)) {
+        if (events.length >= limit) break;
+        events.push(...g.events);
+        end = g.index + 1;
+      }
+    }
+    return { events, end };
+  }
+
+  async timeline(opts: { before?: string | null; after?: string; limit: number; via?: string | null }): Promise<TimelinePage> {
     return this.retryIfStale(() => {
       const n = this.tail.recordCount;
-      const end = this.parse(opts.before) ?? n;
       const limit = Math.max(1, opts.limit);
-      const { events, start } = this.page(end, limit, this.pathOf(opts.via));
-      const page: TimelinePage = { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
+      const path = this.pathOf(opts.via);
+      let page: TimelinePage;
+      if (opts.after !== undefined) {
+        const start = opts.after === "" ? 0 : (this.parse(opts.after) ?? n);
+        const { events, end } = this.forward(start, limit, path);
+        page = { events, before: start > 0 ? this.cursorAt(start) : null, after: end < n ? this.cursorAt(end) : null, cursor: this.cursorAt(n) };
+      } else {
+        const { events, start } = this.page(this.parse(opts.before) ?? n, limit, path);
+        page = { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
+      }
       if (opts.via) page.via = opts.via;
       return page;
+    });
+  }
+
+  /** Found once, an event's record stays where it is until the file is read anew. */
+  private located = new Map<string, number>();
+
+  async locate(id: string): Promise<string | null> {
+    return this.retryIfStale(() => {
+      const key = `${this.epoch()} ${id}`;
+      let at = this.located.get(key);
+      if (at === undefined) {
+        const hint = this.format.locate?.(id);
+        if (!hint) return null;
+        const n = this.tail.recordCount;
+        const found = ("index" in hint ? [hint.index] : this.tail.find(hint.text)).find((i) => {
+          if (i >= n) return false;
+          const rec = this.tail.range(i, i + 1)[0];
+          return !!rec && this.piecesOf(rec.value, i).some((p) => p.kind !== "result" && p.event.id === id);
+        });
+        if (found === undefined) return null;
+        at = found;
+        if (this.located.size >= 256) this.located.delete(this.located.keys().next().value!);
+        this.located.set(key, at);
+      }
+      return this.cursorAt(at);
     });
   }
 

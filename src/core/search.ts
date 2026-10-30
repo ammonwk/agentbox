@@ -104,6 +104,21 @@ export function searchSaid(q: string, limit: number, include: (sessionId: string
   return out;
 }
 
+/** Each message in one session where `q` was said, in the order it was
+ *  said: what finding in a conversation steps through. Empty under three
+ *  characters, which a trigram cannot match. */
+export function searchSaidIn(session: string, q: string): { event: string; at: number; kind: "user" | "assistant" }[] {
+  const needle = q.trim();
+  const reader = needle.length < 3 ? null : index();
+  if (!reader) return [];
+  return reader
+    .query(
+      `SELECT said.event, said.at, said.kind FROM said_fts JOIN said ON said.id = said_fts.rowid
+       WHERE said_fts MATCH ? AND said.session = ? ORDER BY said.id LIMIT 2000`,
+    )
+    .all(`"${needle.replaceAll('"', '""')}"`, session) as { event: string; at: number; kind: "user" | "assistant" }[];
+}
+
 /** Every message a person or program sent a session since `since`, oldest
  *  first; `launch` when it is part of what the session was launched with:
  *  said before its first reply. A launch prompt can be several rows (omp

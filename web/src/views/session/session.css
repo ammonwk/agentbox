@@ -2142,6 +2142,67 @@ a.tl-sender:hover .tl-sender-name {
   box-shadow: var(--shadow-md);
 }
 
+/* Finding words in the conversation: a bar over the top of the timeline,
+   the words marked as the rail's search marks them, the hit shown brighter. */
+.tl-find {
+  position: absolute;
+  top: 8px;
+  right: 40px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  box-shadow: var(--shadow-md);
+  color: var(--muted);
+}
+.tl-find input {
+  width: 220px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.tl-find-n {
+  min-width: 56px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.tl-find-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tl-find-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.tl-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+::highlight(tl-find) {
+  background-color: color-mix(in srgb, var(--warning) 24%, transparent);
+}
+::highlight(tl-find-now) {
+  background-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  color: var(--text);
+}
+
 /* ------------------------------------------------------------ tool rows */
 
 .sx-run {
@@ -3487,6 +3548,16 @@ a.wk-item:hover {
   left: 50%;
   width: 1px;
   background: var(--mr-line);
+}
+/* The stretch of the conversation loaded, when it is not all of it. */
+.mr-held {
+  position: absolute;
+  left: 50%;
+  width: 11px;
+  margin-left: -5.5px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mr-prompt) 14%, transparent);
+  pointer-events: none;
 }
 
 .mr-dot {

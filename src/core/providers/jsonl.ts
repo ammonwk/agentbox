@@ -199,6 +199,55 @@ export class JsonlTail {
   }
 
   /**
+   * The index of each record whose line holds `text`, first to last: a scan
+   * of the bytes read so far, for finding one record without parsing them
+   * all (a few tens of milliseconds for 80 MB in the page cache).
+   */
+  find(text: string): number[] {
+    const needle = Buffer.from(text);
+    const out: number[] = [];
+    let fd: number;
+    try {
+      fd = openSync(this.path, "r");
+    } catch {
+      return out;
+    }
+    try {
+      const buf = Buffer.allocUnsafe(CHUNK);
+      let pos = 0;
+      while (pos < this.offset) {
+        const n = readSync(fd, buf, 0, Math.min(CHUNK, this.offset - pos), pos);
+        if (n <= 0) break;
+        const data = buf.subarray(0, n);
+        for (let i = data.indexOf(needle); i >= 0; i = data.indexOf(needle, i + 1)) {
+          const at = this.indexAt(pos + i);
+          if (at >= 0 && out[out.length - 1] !== at) out.push(at);
+        }
+        if (pos + n >= this.offset || n <= needle.length) break;
+        pos += n - needle.length + 1;
+      }
+    } finally {
+      closeSync(fd);
+    }
+    return out;
+  }
+
+  /** The record whose line holds byte `offset`, or -1 before the first. */
+  private indexAt(offset: number): number {
+    let lo = 0;
+    let hi = this.starts.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.starts[mid]! <= offset) {
+        found = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    return found;
+  }
+
+  /**
    * Records `[fromIndex, toIndex)` by index, re-read from disk. Only indices
    * already seen by `read()` are addressable.
    */

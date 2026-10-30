@@ -249,10 +249,16 @@ export interface TranscriptReader {
    * can skip work. A truncated or replaced file is re-read from the start.
    */
   refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }>;
-  /** A page of timeline events ending at `before` (or the newest events).
-   *  With `via` (a message's `versions.of` entry), the conversation through
-   *  that version of the message rather than as it stands. */
-  timeline(opts: { before?: string | null; limit: number; via?: string | null }): Promise<TimelinePage>;
+  /** A page of timeline events ending at `before` (or the newest events),
+   *  or, with `after`, starting at it ("" is the start of the conversation)
+   *  and running forward. `before` and `after` are positions: a page's own,
+   *  or `locate`'s. With `via` (a message's `versions.of` entry), the
+   *  conversation through that version of the message rather than as it
+   *  stands. */
+  timeline(opts: { before?: string | null; after?: string; limit: number; via?: string | null }): Promise<TimelinePage>;
+  /** The position just before an event (or before the record it is in),
+   *  to page from; null when the transcript has no such event. */
+  locate(id: string): Promise<string | null>;
   /**
    * Events after `cursor`. `reset` means the cursor is no longer valid (the
    * file was replaced) and `events` is a fresh newest page instead. A tool

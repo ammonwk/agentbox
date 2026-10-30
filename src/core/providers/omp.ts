@@ -624,9 +624,42 @@ class OmpReader implements TranscriptReader {
     return `${this.gen}:${this.tail.recordCount}`;
   }
 
-  async timeline(opts: { before?: string | null; limit: number }): Promise<TimelinePage> {
+  async timeline(opts: { before?: string | null; after?: string; limit: number }): Promise<TimelinePage> {
     this.pull();
-    return this.page(opts.before ?? null, opts.limit);
+    return opts.after !== undefined ? this.forward(opts.after, opts.limit) : this.page(opts.before ?? null, opts.limit);
+  }
+
+  /** An event id is its position: the place just before it. */
+  async locate(id: string): Promise<string | null> {
+    this.pull();
+    const rec = Number(id.split(".")[0]);
+    const anchors = this.state.anchors;
+    if (!Number.isInteger(rec) || anchors[lowerBound(anchors, rec)] !== rec) return null;
+    return this.materialize([rec]).some((e) => e.id === id) ? id : null;
+  }
+
+  /** From the event `after` names ("" is the start) on, `limit` of them. */
+  private forward(after: string, limit: number): TimelinePage {
+    const anchors = this.state.anchors;
+    let p = 0;
+    let collected: TimelineEvent[] = [];
+    if (after) {
+      const rec = Number(after.split(".")[0]);
+      p = lowerBound(anchors, rec);
+      if (anchors[p] === rec) {
+        const evs = this.materialize([rec]);
+        collected = evs.slice(Math.max(0, evs.findIndex((e) => e.id === after)));
+        p++;
+      }
+    }
+    while (collected.length <= limit && p < anchors.length) {
+      const to = Math.min(anchors.length, p + 64);
+      collected = collected.concat(this.materialize(anchors.slice(p, to)));
+      p = to;
+    }
+    const events = collected.slice(0, limit);
+    const next = collected[limit];
+    return { events, before: after && events[0] ? events[0].id : null, after: next ? next.id : null, cursor: this.cursor() };
   }
 
   private page(before: string | null, limit: number): TimelinePage {

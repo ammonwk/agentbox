@@ -309,13 +309,19 @@ export const api = {
       titled: AppState["sessions"];
       said: { sessionId: string; event: string; at: number; kind: "user" | "assistant"; snippet: string; session: AppState["sessions"][number] }[];
     }>(`/api/sessions/search?${new URLSearchParams({ q, ...(project ? { project } : {}) })}`),
+  /** Each message in one session where `q` was said, in order. */
+  saidIn: (id: string, q: string) => get<{ event: string; at: number; kind: "user" | "assistant" }[]>(`/api/sessions/${enc(id)}/said?${new URLSearchParams({ q })}`),
   /** One session by id, wherever in history it is. */
   session: (id: string) => get<AppState["sessions"][number]>(`/api/sessions/${enc(id)}`),
   /** Which of these words name a session, as provider id or agentbox id → agentbox id. */
   resolveSessions: (refs: string[]) => post<Record<string, string>>("/api/sessions/resolve", { refs }),
-  timeline: (id: string, opts: { before?: string; limit?: number; via?: string } = {}) => {
+  /** A page ending at `before` (the newest, without), one starting at
+   *  `after` ("" is the start of the conversation), or one `around` an event. */
+  timeline: (id: string, opts: { before?: string; after?: string; around?: string; limit?: number; via?: string } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);
+    if (opts.after !== undefined) q.set("after", opts.after);
+    if (opts.around) q.set("around", opts.around);
     if (opts.via) q.set("via", opts.via);
     if (opts.limit) q.set("limit", String(opts.limit));
     const qs = q.toString();
@@ -760,13 +766,31 @@ export const OLDER_PAGE = 100;
 
 export interface TimelineState {
   events: readonly TimelineEvent[];
-  /** The first `reset` frame has arrived. Before it, "empty" means "not yet". */
+  /** The first page has arrived. Before it, "empty" means "not yet". */
   ready: boolean;
   loadingOlder: boolean;
-  /** Nothing older exists (the server said `before: null`). */
+  loadingNewer: boolean;
+  /** Nothing older exists. */
   exhausted: boolean;
+  /** What is held runs to the newest event, so what lands next lands on it. */
+  atEnd: boolean;
+  /** Events that landed since what is held stopped reaching the newest. */
+  fresh: number;
   error: string | null;
 }
+
+export interface TimelineWindow extends TimelineState {
+  loadOlder: (limit?: number) => void;
+  loadNewer: (limit?: number) => void;
+  /** Hold the stretch of the conversation around an event, unless it is
+   *  held already: true once it is, false when the conversation has none. */
+  goTo: (id: string) => Promise<boolean>;
+  /** Hold the newest events again. */
+  toLatest: () => void;
+}
+
+/** Events in the stretch a jump opens. */
+const AROUND = 200;
 
 /** Timelines of the sessions opened last, so going back to one paints at
  *  once instead of waiting on the server to read and send its page again. */
@@ -775,7 +799,6 @@ const RECENT_TIMELINES = 8;
 interface CachedTimeline {
   events: readonly TimelineEvent[];
   before: string | null | undefined;
-  exhausted: boolean;
   /** The last live frame's: where the server goes on from when it is watched again. */
   cursor: string | undefined;
 }
@@ -800,121 +823,234 @@ function continues(held: readonly TimelineEvent[], page: readonly TimelineEvent[
   return held.slice(from).every((e) => ids.has(e.id));
 }
 
-/**
- * One session's timeline, over the `watch` subscription: a `reset` frame with
- * the newest page, then increments, merged by id (a tool event is re-sent with
- * the same id when its result lands). Scrolling up pages backwards over HTTP,
- * from the reset frame's `before` cursor and then each page's.
- *
- * A session with no transcript yet gets a reset frame with no `before`; its
- * first older page, if one ever exists, is asked for by the oldest held
- * event's id.
- *
- * One of the last `RECENT_TIMELINES` sessions opened starts from what it
- * showed when it was left, ready at once, and the reset frame folds in over it.
- */
-export function useTimeline(sessionId: string): TimelineState & { loadOlder: (limit?: number) => void } {
-  const [st, setSt] = useState(() => openingTimeline(sessionId));
-  // Another session: start from its cached copy in this same render, so
-  // neither the last one's rows nor "Reading the transcript…" paint first.
-  let cur = st;
-  if (st.of !== sessionId) {
-    cur = openingTimeline(sessionId);
-    setSt(cur);
-  }
-  const before = useRef<string | null | undefined>(undefined);
-  const live = useRef<string | undefined>(undefined);
-  const busy = useRef(false);
-  const eventsRef = useRef<readonly TimelineEvent[]>([]);
-  const exhaustedRef = useRef(false);
-
-  useEffect(() => {
-    // A session seen lately paints what it showed then, at once; the reset
-    // frame the watch brings folds in over it.
-    const cached = recentTimelines.get(sessionId);
-    let fromCache = !!cached;
-    before.current = cached?.before;
-    live.current = cached?.cursor;
-    busy.current = false;
-    eventsRef.current = cached?.events ?? [];
-    exhaustedRef.current = cached?.exhausted ?? false;
-    const remember = () =>
-      rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current, cursor: live.current });
-
-    const off = wire.onMessage((msg) => {
-      if (msg.type !== "timeline" || msg.sessionId !== sessionId) return;
-      live.current = msg.cursor || undefined;
-      if (msg.reset) {
-        const held = eventsRef.current;
-        // Over the cached copy only where the two meet: a session that ran
-        // past a whole page since has a gap between them, and the fresh page
-        // alone is right. Merging keeps unchanged events as they were, so
-        // rows already on screen are not rebuilt; older pages the cache held
-        // stay, and so does the cursor behind them.
-        const keep = fromCache && held.length > 0 && msg.events.length > 0 && continues(held, msg.events);
-        fromCache = false;
-        if (keep) {
-          eventsRef.current = mergeTimeline(held, msg.events);
-        } else {
-          before.current = msg.before;
-          exhaustedRef.current = msg.before === null;
-          eventsRef.current = mergeTimeline([], msg.events);
-        }
-        setSt({ of: sessionId, events: eventsRef.current, ready: true, loadingOlder: false, exhausted: exhaustedRef.current, error: null });
-      } else {
-        const next = mergeTimeline(eventsRef.current, msg.events);
-        if (next === eventsRef.current) return;
-        eventsRef.current = next;
-        setSt((s) => ({ ...s, events: next, ready: true }));
-      }
-      remember();
-    });
-    // What it said since we were last here, or the newest page if that copy is gone.
-    wire.watch(sessionId, cached?.cursor);
-    return () => {
-      off();
-      if (eventsRef.current.length > 0) remember();
-      if (wire.watchingId() === sessionId) wire.watch(null);
-    };
-  }, [sessionId]);
-
-  /** A bigger `limit` for a jump far back; the server caps it at 1000. */
-  const loadOlder = useCallback((limit: number = OLDER_PAGE) => {
-    if (busy.current) return;
-    const held = eventsRef.current;
-    if (before.current === null || held.length === 0) return;
-    const cursor = before.current ?? held[0].id;
-    busy.current = true;
-    setSt((s) => ({ ...s, loadingOlder: true, error: null }));
-    api
-      .timeline(sessionId, { before: cursor, limit })
-      .then((page) => {
-        before.current = page.before;
-        eventsRef.current = mergeTimeline(eventsRef.current, page.events, "prepend");
-        exhaustedRef.current = page.before === null || page.events.length === 0;
-        setSt((s) => ({
-          ...s,
-          events: eventsRef.current,
-          loadingOlder: false,
-          exhausted: exhaustedRef.current,
-        }));
-        rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current, cursor: live.current });
-      })
-      .catch((e: unknown) => {
-        setSt((s) => ({ ...s, loadingOlder: false, error: e instanceof Error ? e.message : String(e) }));
-      })
-      .finally(() => {
-        busy.current = false;
-      });
-  }, [sessionId]);
-
-  return { ...cur, loadOlder };
+/** What a timeline holds, and how it goes on at either end. */
+interface Held {
+  events: readonly TimelineEvent[];
+  /** Where the page before it starts; null at the start of the conversation,
+   *  undefined when not known (the oldest held event's id is asked by). */
+  before: string | null | undefined;
+  /** Where the page after it starts; null when it runs to the newest event. */
+  after: string | null;
+  /** The newest events, as the watch keeps them: what `toLatest` holds, and
+   *  what what is held joins once it reaches them. */
+  tail: readonly TimelineEvent[];
+  tailBefore: string | null | undefined;
+  /** Where the server goes on from when the session is watched again. */
+  cursor: string | undefined;
+  fresh: number;
+  ready: boolean;
+  loadingOlder: boolean;
+  loadingNewer: boolean;
+  error: string | null;
+  /** Bumped when what is held is replaced: a page asked for before is dropped. */
+  gen: number;
 }
 
-/** Where a session's timeline starts: its cached copy, ready, or nothing yet. */
-function openingTimeline(sessionId: string): TimelineState & { of: string } {
-  const c = recentTimelines.get(sessionId);
-  return { of: sessionId, events: c?.events ?? [], ready: !!c, loadingOlder: false, exhausted: c?.exhausted ?? false, error: null };
+const emptyHeld = (): Held => ({
+  events: [], before: undefined, after: null, tail: [], tailBefore: undefined, cursor: undefined,
+  fresh: 0, ready: false, loadingOlder: false, loadingNewer: false, error: null, gen: 0,
+});
+
+function stateOf(h: Held): TimelineState {
+  return {
+    events: h.events, ready: h.ready, loadingOlder: h.loadingOlder, loadingNewer: h.loadingNewer,
+    exhausted: h.before === null, atEnd: h.after === null, fresh: h.fresh, error: h.error,
+  };
+}
+
+/** A session seen lately starts from what it showed then, ready at once. */
+function opening(sessionId: string, live: boolean): Held {
+  const h = emptyHeld();
+  const c = live ? recentTimelines.get(sessionId) : undefined;
+  if (c) Object.assign(h, { events: c.events, before: c.before, tail: c.events, tailBefore: c.before, cursor: c.cursor, ready: true });
+  return h;
+}
+
+/**
+ * A stretch of one session's conversation: the newest events to begin with,
+ * paged older as you scroll up, or the stretch around any message, paged
+ * either way. Opening a message costs one page however far back it is.
+ *
+ * Live (no `via`), the `watch` subscription keeps the newest events: a
+ * `reset` frame with the newest page, then increments, merged by id (a tool
+ * event is re-sent with the same id when its result lands). They land on
+ * what is held while it runs to the newest event; while it does not, they
+ * are kept aside, and what is held joins them once paging forward reaches
+ * them. With `via` (a version of a message), the conversation through that
+ * version, read over HTTP with nothing live; `via` null holds nothing.
+ *
+ * One of the last `RECENT_TIMELINES` sessions opened starts from what it
+ * showed when it was left, and the reset frame folds in over it.
+ */
+export function useTimeline(sessionId: string, via?: string | null): TimelineWindow {
+  const live = via === undefined;
+  const key = `${sessionId}\n${via ?? ""}${live ? "" : "\n"}`;
+  const h = useRef<Held & { key: string }>({ ...opening(sessionId, live), key });
+  if (h.current.key !== key) h.current = { ...opening(sessionId, live), key };
+  const [st, setSt] = useState(() => ({ key, ...stateOf(h.current) }));
+  const shown = st.key === key ? st : { key, ...stateOf(h.current) };
+  const publish = useCallback(() => setSt({ key: h.current.key, ...stateOf(h.current) }), []);
+
+  const remember = (w: Held) => {
+    if (!live || !w.ready) return;
+    // What is newest, so a session left far back opens at its end again.
+    const end = w.after === null;
+    rememberTimeline(sessionId, { events: end ? w.events : w.tail, before: end ? w.before : w.tailBefore, cursor: w.cursor });
+  };
+
+  /** What is held reaches the newest events: it runs on into them. */
+  const join = (w: Held) => {
+    w.events = mergeTimeline(w.events, w.tail);
+    w.after = null;
+    w.fresh = 0;
+  };
+
+  useEffect(() => {
+    const w = h.current;
+    if (via === null) return;
+    if (!live) {
+      api.timeline(sessionId, { via, limit: AROUND }).then(
+        (page) => {
+          if (h.current !== w) return;
+          Object.assign(w, { events: mergeTimeline([], page.events), before: page.before, ready: true });
+          publish();
+        },
+        (e: unknown) => {
+          if (h.current !== w) return;
+          Object.assign(w, { ready: true, error: e instanceof Error ? e.message : String(e) });
+          publish();
+        },
+      );
+      return;
+    }
+    const off = wire.onMessage((msg) => {
+      if (msg.type !== "timeline" || msg.sessionId !== sessionId || h.current !== w) return;
+      w.cursor = msg.cursor || undefined;
+      if (msg.reset) {
+        w.tail = mergeTimeline([], msg.events);
+        w.tailBefore = msg.before;
+        if (w.after === null) {
+          // Over what is held only where the two meet: a session that ran
+          // past a whole page since has a gap between them, and the fresh
+          // page alone is right. Merging keeps unchanged events as they
+          // were, so rows already on screen are not rebuilt, and older pages
+          // held stay, with the cursor behind them.
+          if (w.events.length > 0 && msg.events.length > 0 && continues(w.events, msg.events)) w.events = mergeTimeline(w.events, msg.events);
+          else Object.assign(w, { events: w.tail, before: msg.before });
+        }
+        w.ready = true;
+      } else {
+        const tail = mergeTimeline(w.tail, msg.events);
+        if (tail === w.tail) return;
+        if (w.after === null) w.events = mergeTimeline(w.events, msg.events);
+        else {
+          // Only what is held changes: a call held got its result.
+          const ids = new Set(w.events.map((e) => e.id));
+          w.events = mergeTimeline(w.events, msg.events.filter((e) => ids.has(e.id)));
+          w.fresh += tail.length - w.tail.length;
+        }
+        w.tail = tail;
+      }
+      publish();
+      remember(w);
+    });
+    // What it said since we were last here, or the newest page if that copy is gone.
+    wire.watch(sessionId, w.cursor);
+    return () => {
+      off();
+      remember(w);
+      if (wire.watchingId() === sessionId) wire.watch(null);
+    };
+  }, [key]);
+
+  const loadOlder = useCallback(
+    (limit: number = OLDER_PAGE) => {
+      const w = h.current;
+      if (w.loadingOlder || w.before === null || w.events.length === 0) return;
+      const gen = w.gen;
+      Object.assign(w, { loadingOlder: true, error: null });
+      publish();
+      api
+        .timeline(sessionId, { before: w.before ?? w.events[0]!.id, limit, ...(via ? { via } : {}) })
+        .then(
+          (page) => {
+            if (h.current !== w || w.gen !== gen) return;
+            w.events = mergeTimeline(w.events, page.events, "prepend");
+            w.before = page.events.length === 0 ? null : page.before;
+          },
+          (e: unknown) => {
+            if (h.current === w && w.gen === gen) w.error = e instanceof Error ? e.message : String(e);
+          },
+        )
+        .finally(() => {
+          if (h.current !== w || w.gen !== gen) return;
+          w.loadingOlder = false;
+          publish();
+          remember(w);
+        });
+    },
+    [sessionId, via],
+  );
+
+  const loadNewer = useCallback(
+    (limit: number = OLDER_PAGE) => {
+      const w = h.current;
+      if (w.loadingNewer || w.after === null) return;
+      const gen = w.gen;
+      Object.assign(w, { loadingNewer: true, error: null });
+      publish();
+      api
+        .timeline(sessionId, { after: w.after, limit, ...(via ? { via } : {}) })
+        .then(
+          (page) => {
+            if (h.current !== w || w.gen !== gen) return;
+            w.events = mergeTimeline(w.events, page.events);
+            const tail = new Set(w.tail.map((e) => e.id));
+            if (!page.after || page.events.some((e) => tail.has(e.id))) join(w);
+            else w.after = page.after;
+          },
+          (e: unknown) => {
+            if (h.current === w && w.gen === gen) w.error = e instanceof Error ? e.message : String(e);
+          },
+        )
+        .finally(() => {
+          if (h.current !== w || w.gen !== gen) return;
+          w.loadingNewer = false;
+          publish();
+        });
+    },
+    [sessionId, via],
+  );
+
+  const goTo = useCallback(
+    (id: string): Promise<boolean> => {
+      const w = h.current;
+      if (w.events.some((e) => e.id === id)) return Promise.resolve(true);
+      const gen = ++w.gen;
+      return api.timeline(sessionId, { around: id, limit: AROUND, ...(via ? { via } : {}) }).then(
+        (page) => {
+          if (h.current !== w || w.gen !== gen) return false;
+          Object.assign(w, { events: mergeTimeline([], page.events), before: page.before, after: page.after ?? null, fresh: 0, loadingOlder: false, loadingNewer: false, error: null });
+          const tail = new Set(w.tail.map((e) => e.id));
+          if (w.after === null || page.events.some((e) => tail.has(e.id))) join(w);
+          publish();
+          return true;
+        },
+        () => false,
+      );
+    },
+    [sessionId, via],
+  );
+
+  const toLatest = useCallback(() => {
+    const w = h.current;
+    if (w.after === null) return;
+    w.gen++;
+    Object.assign(w, { events: w.tail, before: w.tailBefore, after: null, fresh: 0, loadingOlder: false, loadingNewer: false, error: null });
+    publish();
+  }, []);
+
+  return { ...shown, loadOlder, loadNewer, goTo, toLatest };
 }
 
 /**

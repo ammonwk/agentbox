@@ -848,6 +848,9 @@ export interface TimelinePage {
   via?: string;
   /** Pass back as `before` to get the page before this one. Null at the start. */
   before: string | null;
+  /** On a page read forward: pass back as `after` to get the page after it.
+   *  Null when it reaches the newest event. */
+  after?: string | null;
   /** Pass back as `since` to get what happened after this page. */
   cursor: string;
 }

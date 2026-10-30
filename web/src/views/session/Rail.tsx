@@ -498,7 +498,10 @@ export function Rail({
                     current={s.id === current}
                     onMenu={onMenu}
                     tab="timeline"
-                    onClick={() => jumpInTimeline(s.id, { turnId: event })}
+                    at={event}
+                    // The words go with it, to find the rest; a link already
+                    // open is not followed again, so its message goes too.
+                    onClick={(e) => jumpInTimeline(s.id, { find: q, turnId: e.currentTarget.getAttribute("href") === location.hash ? event : undefined })}
                     when={<RelativeTime ts={at} short title={`Said ${new Date(at).toLocaleString()}`} />}
                   >
                     <span className="rail-said-line">
@@ -1356,6 +1359,7 @@ function HitRow({
   current,
   onMenu,
   tab,
+  at,
   onClick,
   when,
   children,
@@ -1364,7 +1368,9 @@ function HitRow({
   current: boolean;
   onMenu: (s: SessionRow, x: number, y: number) => void;
   tab: SessionTab;
-  onClick?: () => void;
+  /** The message it was found in, to open the session at. */
+  at?: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
   when: ReactNode;
   children?: ReactNode;
 }) {
@@ -1373,7 +1379,7 @@ function HitRow({
       className="rail-row rail-said"
       data-nav-item
       data-nav-id={`session:${s.id}`}
-      href={hrefOf({ page: "session", id: s.id, tab })}
+      href={hrefOf({ page: "session", id: s.id, tab, at })}
       onClick={onClick}
       aria-current={current ? "page" : undefined}
       data-status={s.status}

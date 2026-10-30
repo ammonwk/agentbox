@@ -9,19 +9,20 @@ import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
 import { AskRow, QuestionCard } from "./Question";
-import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
+import { anchoredScrollTop, distanceFromBottom, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { onJump, takeJump } from "./jump";
+import { FindBar, useMarks } from "./Find";
 import { useFamily } from "./family";
 import { copyText, PROVIDER_LABEL, StatusDot } from "../../bits";
 import { shownStatus, titleOf } from "../../lib/board";
-import { hrefOf } from "../../route";
+import { hrefOf, onGo, parseHash } from "../../route";
 import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
 import { AgentDir } from "./viewerstore";
-import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
+import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, type MessageEdits } from "./versions";
 import { useAction } from "./useAction";
 import "./refusal.css";
 
@@ -57,10 +58,33 @@ function remember(sessionId: string, patch: Partial<Place>): void {
   if (places.size > 50) places.delete(places.keys().next().value!);
 }
 
+/** The message the page's link opens this session at (`Route.at`), if any. */
+function linkedAt(sessionId: string): string | null {
+  const r = parseHash(location.hash);
+  return r.page === "session" && r.id === sessionId ? (r.at ?? null) : null;
+}
+
+function useLinkedAt(sessionId: string): string | null {
+  const [at, setAt] = useState(() => linkedAt(sessionId));
+  useEffect(() => {
+    const read = () => setAt(linkedAt(sessionId));
+    read();
+    window.addEventListener("hashchange", read);
+    const off = onGo(read);
+    return () => {
+      window.removeEventListener("hashchange", read);
+      off();
+    };
+  }, [sessionId]);
+  return at;
+}
+
 /**
  * The conversation as the provider's transcript records it, folded into
- * provider-neutral events. Newest at the bottom; scrolling to the top pages
- * older history in, anchored so the reader does not lose their place.
+ * provider-neutral events: a stretch of it (`useTimeline`), the newest to
+ * begin with. Scrolling pages it on at either end, anchored so the reader
+ * does not lose their place; going to a message anywhere (the rail, a link,
+ * a search) opens the stretch around it, one page however far back it is.
  */
 export function Timeline({ session }: { session: Session }) {
   // Reading the conversation through another version of a message (an
@@ -68,12 +92,14 @@ export function Timeline({ session }: { session: Session }) {
   const [via, setVia] = useState<{ session: string; via: string } | null>(null);
   const viewing = via?.session === session.id ? via.via : null;
   const current = useTimeline(session.id);
-  const version = useVersionTimeline(session.id, viewing);
-  const { events, ready, loadingOlder, exhausted, error, loadOlder } = viewing ? version : current;
+  const version = useTimeline(session.id, viewing);
+  const win = viewing ? version : current;
+  const { events, ready, loadingOlder, loadingNewer, exhausted, atEnd, fresh, error, loadOlder, loadNewer } = win;
   const btw = useBtw(session.id);
-  // The agent works on the last turn: its trace stays open-ended and its answer waits.
-  const live = session.status === "running" && !session.background && !viewing;
-  const allRows = useMemo(() => traceTurns(withBtw(groupTimeline(events), btw, exhausted), live), [events, btw, exhausted, live]);
+  // The agent works on the last turn: its trace stays open-ended and its
+  // answer waits. Only at the end: a stretch from further back is history.
+  const live = session.status === "running" && !session.background && !viewing && atEnd;
+  const allRows = useMemo(() => traceTurns(withBtw(groupTimeline(events), btw, exhausted, atEnd), live), [events, btw, exhausted, atEnd, live]);
   // Which trace holds each event, so a jump to one inside opens it first.
   const traceOf = useMemo(() => {
     const m = new Map<string, Extract<TimelineRow, { type: "trace" }>>();
@@ -133,9 +159,9 @@ export function Timeline({ session }: { session: Session }) {
     return m;
   }, [events, board]);
   // Sent mid-turn and held by the agent until its current step yields.
-  const queued = viewing ? NO_QUEUED : session.queued;
+  const queued = viewing || !atEnd ? NO_QUEUED : session.queued;
   const sending = useEchoes(session.id, events, queued);
-  const echoes = viewing ? NO_ECHOES : sending;
+  const echoes = viewing || !atEnd ? NO_ECHOES : sending;
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
   // the next step is written). The terminal shows the same state.
@@ -153,16 +179,28 @@ export function Timeline({ session }: { session: Session }) {
   const dirs = useMemo(() => agentDirs(events), [events]);
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState(() => !places.get(session.id)?.at);
+  const linked = useLinkedAt(session.id);
+  const [jump, setJump] = useState<string | null>(linked);
+  // Read by the scroll keeping below, which a jump on its way must not undo.
+  const jumping = useRef(jump);
+  jumping.current = jump;
+  const [pinned, setPinned] = useState(() => !linked && !places.get(session.id)?.at);
   const [restore, setRestore] = useState(() => places.get(session.id)?.at ?? null);
   const prev = useRef({ count: 0, firstId: "", scrollTop: 0, scrollHeight: 0, initial: true });
+  /** Back at the newest events: go to the end once they are rendered. */
+  const toBottom = useRef(false);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el || events.length === 0) return;
     const p = prev.current;
     const firstId = events[0].id;
-    if (!p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
+    if (toBottom.current) {
+      toBottom.current = false;
+      el.scrollTop = el.scrollHeight;
+    } else if (jumping.current) {
+      // Where it goes is the jump's to say.
+    } else if (!p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
       // Older history landed above the reader: hold their place.
       el.scrollTop = anchoredScrollTop(p, el);
     } else if (shouldAutoScroll({ wasPinned: pinned, grew: events.length >= p.count, initial: p.initial })) {
@@ -174,8 +212,8 @@ export function Timeline({ session }: { session: Session }) {
   // A question came up while you were at the tail (or the session opened on
   // one): show it from its top, which a card taller than the view would
   // otherwise have scrolled past.
-  const question = viewing ? null : session.question;
-  const dialog = viewing ? null : session.dialog;
+  const question = viewing || !atEnd ? null : session.question;
+  const dialog = viewing || !atEnd ? null : session.dialog;
   const dialogSig = dialog ? `${dialog.title ?? ""}|${dialog.options.map((o) => o.label).join("|")}` : null;
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -204,8 +242,10 @@ export function Timeline({ session }: { session: Session }) {
   const turns = viewing ? NO_TURNS : (turnList?.turns ?? NO_TURNS);
   const turnIds = useMemo(() => new Set(turns.map((t) => t.id)), [turns]);
   const [reading, setCurrent] = useState<string | null>(null);
-  const [jump, setJump] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Finding words in it: what, and the hit shown.
+  const [find, setFind] = useState<{ q: string; start?: string; n: number } | null>(null);
+  const [found, setFound] = useState<string | null>(null);
 
   const rowOf = useCallback(
     (id: string) => boxRef.current?.querySelector<HTMLElement>(`[data-ev="${CSS.escape(id)}"]`) ?? null,
@@ -233,22 +273,32 @@ export function Timeline({ session }: { session: Session }) {
   useEffect(findCurrent, [findCurrent, events]);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
-  // One handed over from the terminal's rail; else, with no place of yours to
-  // go back to (a reload), the message you left an edit open on.
+  // A message the link names; one handed over from the terminal's rail, or
+  // words a search found; else, with no place of yours to go back to (a
+  // reload), the message you left an edit open on.
+  useEffect(() => {
+    if (linked) setJump(linked);
+  }, [linked]);
   useEffect(() => {
     const take = () => {
       const j = takeJump(session.id);
-      if (j) {
-        setJump(j.turnId);
-        setNote(j.note ?? null);
+      if (!j) return false;
+      if (j.turnId) setJump(j.turnId);
+      if (j.note) setNote(j.note);
+      if (j.find) {
+        const start = j.turnId ?? linkedAt(session.id) ?? undefined;
+        setFind((f) => ({ q: j.find!, start, n: (f?.n ?? 0) + 1 }));
+        setFound(start ?? null);
       }
-      return j;
+      return true;
     };
-    if (!take() && !returning) {
+    if (!take() && !returning && !linkedAt(session.id)) {
       const open = openEdit(session.id);
       if (open) setJump(open.ev);
     }
-    return onJump((id) => id === session.id && take());
+    return onJump((id) => {
+      if (id === session.id) take();
+    });
   }, [session.id, returning]);
   useEffect(() => {
     if (!note) return;
@@ -256,8 +306,11 @@ export function Timeline({ session }: { session: Session }) {
     return () => clearTimeout(t);
   }, [note]);
 
-  // Go to it once it is rendered, paging older history in until it is.
-  useEffect(() => {
+  // Go to it once it is rendered: open the trace it is folded into, or, when
+  // it is not held, the stretch of the conversation around it.
+  const going = useRef<string | null>(null);
+  const { goTo } = win;
+  useLayoutEffect(() => {
     if (!jump || !ready || staged) return;
     const box = boxRef.current;
     const el = rowOf(jump);
@@ -267,14 +320,23 @@ export function Timeline({ session }: { session: Session }) {
       void el.offsetWidth; // restart the animation on a second jump to the same row
       el.classList.add("mr-flash");
       setTimeout(() => el.classList.remove("mr-flash"), 1900);
+      setPinned(atEnd && isPinnedToBottom(box));
       setJump(null);
       return;
     }
     const trace = traceOf.get(jump);
-    if (trace && !isOpen(trace)) toggleTrace(trace.id);
-    else if (exhausted || error) setJump(null);
-    else if (!loadingOlder) loadOlder(1000);
-  }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf, traceOf, flipped, hideSteps, toggleTrace]);
+    if (trace && !isOpen(trace)) return toggleTrace(trace.id);
+    // Held but not a row of its own (a thought, a note): nowhere to go.
+    if (events.some((e) => e.id === jump)) return setJump(null);
+    if (going.current === jump) return;
+    const id = (going.current = jump);
+    void goTo(id).then((ok) => {
+      if (going.current === id) going.current = null;
+      if (ok) return;
+      setJump((j) => (j === id ? null : j));
+      setNote("That message is not in this conversation as it stands.");
+    });
+  }, [jump, ready, staged, events, atEnd, goTo, rowOf, traceOf, flipped, hideSteps, toggleTrace]);
 
   // Back where you left it, once its rows are all in; a jump wins, and a row
   // no longer held leaves you at the end.
@@ -284,6 +346,7 @@ export function Timeline({ session }: { session: Session }) {
     const box = boxRef.current;
     const el = jump ? null : rowOf(restore.ev);
     if (box && el) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - restore.offset;
+    else if (!jump && !events.some((e) => e.id === restore.ev)) setJump(restore.ev);
     else if (!jump) toLatest();
   }, [restore, jump, ready, staged, rowOf]);
 
@@ -343,29 +406,32 @@ export function Timeline({ session }: { session: Session }) {
   );
 
   const toLatest = () => {
+    setPinned(true);
+    setJump(null);
+    if (!atEnd) {
+      toBottom.current = true;
+      win.toLatest();
+      return;
+    }
     const el = boxRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-    setPinned(true);
   };
 
   const step = (dir: -1 | 1) => {
     const box = boxRef.current;
-    if (!box) return;
+    if (!box || turns.length === 0) return;
     const top = box.getBoundingClientRect().top;
+    // Where you are among your messages: the one you are reading, or, above
+    // the first in view, just before it.
+    const k = reading ? turns.findIndex((t) => t.id === reading) : -1;
+    const next = k >= 0 ? k + 1 : Math.max(0, turns.findIndex((t) => rowOf(t.id)));
     if (dir === -1) {
-      // The last message that starts above the view. One not loaded yet is
-      // older than everything that is, so above it too.
-      let to: Turn | null = null;
-      for (const t of turns) {
-        const el = rowOf(t.id);
-        if (!el || el.getBoundingClientRect().top < top + 4) to = t;
-      }
+      // The start of the one you are in, when it is above the view; else the one before.
+      const el = k >= 0 ? rowOf(turns[k]!.id) : null;
+      const to = el && el.getBoundingClientRect().top < top - 4 ? turns[k] : turns[next - 1 - (k >= 0 ? 1 : 0)];
       if (to) setJump(to.id);
     } else {
-      const to = turns.find((t) => {
-        const el = rowOf(t.id);
-        return el && el.getBoundingClientRect().top > top + 20;
-      });
+      const to = turns[next];
       if (to) setJump(to.id);
       else toLatest();
     }
@@ -398,11 +464,13 @@ export function Timeline({ session }: { session: Session }) {
     notePlace();
     prev.current.scrollTop = el.scrollTop;
     prev.current.scrollHeight = el.scrollHeight;
-    // The first paint's scroll to the end is not the reader leaving their place.
-    const nowPinned = isPinnedToBottom(el);
+    // The first paint's scroll to the end is not the reader leaving their
+    // place; the end of a stretch from further back is not the end.
+    const nowPinned = isPinnedToBottom(el) && atEnd;
     if (nowPinned !== pinned && !restore) setPinned(nowPinned);
-    // A screenful from the top, so the next page is in before you reach it.
+    // A screenful from either end, so the next page is in before you reach it.
     if (isAtTop(el, el.clientHeight) && !exhausted && !loadingOlder && !error) loadOlder();
+    if (distanceFromBottom(el) <= el.clientHeight && !atEnd && !loadingNewer && !error) loadNewer();
     findCurrent();
   };
 
@@ -411,9 +479,39 @@ export function Timeline({ session }: { session: Session }) {
   // history in until there is something to read, or nothing more.
   useEffect(() => {
     const el = boxRef.current;
-    if (!el || !ready || staged || exhausted || loadingOlder || error) return;
-    if (el.scrollHeight <= el.clientHeight * 1.5) loadOlder(FILL_PAGE);
-  }, [ready, staged, exhausted, loadingOlder, error, loadOlder, rows]);
+    if (!el || !ready || staged || loadingOlder || loadingNewer || error || el.scrollHeight > el.clientHeight * 1.5) return;
+    if (!exhausted) loadOlder(FILL_PAGE);
+    else if (!atEnd) loadNewer(FILL_PAGE);
+  }, [ready, staged, exhausted, atEnd, loadingOlder, loadingNewer, error, loadOlder, loadNewer, rows]);
+
+  // Ctrl+F finds in the whole conversation, not only the stretch on the
+  // page; pressed again in the box, it is the browser's own.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "f") return;
+      if ((document.activeElement as HTMLElement | null)?.closest(".tl-find")) return;
+      e.preventDefault();
+      const picked = window.getSelection()?.toString().trim() ?? "";
+      setFind((f) => ({ q: picked && picked.length <= 80 && !picked.includes("\n") ? picked : (f?.q ?? ""), n: (f?.n ?? 0) + 1 }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useMarks(boxRef, find?.q ?? null, found, [rows, flipped]);
+
+  // Where the stretch held sits among your messages, for the rail.
+  const heldSpan = useMemo((): [number, number] | null => {
+    if (exhausted && atEnd) return null;
+    const ids = new Set(events.map((e) => e.id));
+    let a = -1;
+    let b = -1;
+    turns.forEach((t, i) => {
+      if (!ids.has(t.id)) return;
+      if (a < 0) a = i;
+      b = i;
+    });
+    return a < 0 ? null : [a, b];
+  }, [events, turns, exhausted, atEnd]);
 
   const renderRow = (r: Exclude<TimelineRow, { type: "trace" }>) =>
     r.type === "tools" ? (
@@ -520,11 +618,36 @@ export function Timeline({ session }: { session: Session }) {
           ))}
           {thinking && session.background ? <ThinkingLive since={liveSince} now={now} background /> : null}
         </div>
+        {!atEnd ? (
+          <div className="tl-edge" role="status" data-idle={loadingNewer ? undefined : ""}>
+            {loadingNewer ? (
+              <>
+                <Spinner size={12} /> Loading later events…
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      {!pinned && !viewing ? (
+      {find ? (
+        <FindBar
+          key={find.n}
+          sessionId={session.id}
+          initial={find.q}
+          start={find.start}
+          onGo={(id) => {
+            setFound(id);
+            setJump(id);
+          }}
+          onClose={() => {
+            setFind(null);
+            setFound(null);
+          }}
+        />
+      ) : null}
+      {(!pinned || !atEnd) && !viewing ? (
         <div className="tl-jump">
           <Button size="sm" icon={Icon.arrowDown} onClick={toLatest}>
-            Latest
+            {fresh > 0 ? `Latest · ${fresh} new` : "Latest"}
           </Button>
         </div>
       ) : null}
@@ -538,6 +661,7 @@ export function Timeline({ session }: { session: Session }) {
         turns={turns}
         total={turnList?.total ?? 0}
         current={pinned && reading === turns[turns.length - 1]?.id ? null : reading}
+        held={heldSpan}
         busy={jump}
         onJump={(t) => setJump(t.id)}
         onStep={step}

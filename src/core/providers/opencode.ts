@@ -348,9 +348,41 @@ class OpencodeReader implements TranscriptReader {
     return { events, before: more && events.length > 0 ? events[0]!.id : null, cursor: this.cursor() };
   }
 
-  async timeline(opts: { before?: string | null; limit: number }): Promise<TimelinePage> {
+  async timeline(opts: { before?: string | null; after?: string; limit: number }): Promise<TimelinePage> {
     this.pull();
-    return this.page(opts.before ?? null, opts.limit);
+    return opts.after !== undefined ? this.forward(opts.after, opts.limit) : this.page(opts.before ?? null, opts.limit);
+  }
+
+  /** An event id is its position: the place just before it. */
+  async locate(id: string): Promise<string | null> {
+    this.pull();
+    const seq = Number(id.split(".")[0]);
+    if (!Number.isInteger(seq) || !this.rows.some((r) => r.shown && r.seq === seq)) return null;
+    return this.materialize([seq]).some((e) => e.id === id) ? id : null;
+  }
+
+  /** From the event `after` names ("" is the start) on, `limit` of them. */
+  private forward(after: string, limit: number): TimelinePage {
+    const anchors = this.rows.filter((r) => r.shown).map((r) => r.seq);
+    let p = 0;
+    let collected: TimelineEvent[] = [];
+    if (after) {
+      const seq = Number(after.split(".")[0]);
+      const pos = anchors.indexOf(seq);
+      if (pos >= 0) {
+        const evs = this.materialize([seq]);
+        collected = evs.slice(Math.max(0, evs.findIndex((e) => e.id === after)));
+        p = pos + 1;
+      }
+    }
+    while (collected.length <= limit && p < anchors.length) {
+      const to = Math.min(anchors.length, p + 64);
+      collected = collected.concat(this.materialize(anchors.slice(p, to)));
+      p = to;
+    }
+    const events = collected.slice(0, limit);
+    const next = collected[limit];
+    return { events, before: after && events[0] ? events[0].id : null, after: next ? next.id : null, cursor: this.cursor() };
   }
 
   /** Rows rewritten since the cursor (a step that went on running) are sent

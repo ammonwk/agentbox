@@ -35,7 +35,7 @@ import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
-import { searchSaid, startSearchIndex } from "../core/search";
+import { searchSaid, searchSaidIn, startSearchIndex } from "../core/search";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { McpError, addServer, importServer, readRegistry, removeServer, setEnabled, updateServer } from "../core/mcp";
@@ -1499,8 +1499,13 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
-    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit, url.searchParams.get("via")));
+    const [id, via, around, after] = [params.id!, url.searchParams.get("via"), url.searchParams.get("around"), url.searchParams.get("after")];
+    if (around) return json(await fleet.timelineAround(id, around, limit, via));
+    if (after !== null) return json(await fleet.timelineAfter(id, after, limit, via));
+    return json(await fleet.timeline(id, url.searchParams.get("before"), limit, via));
   })
+  // Where in one session the words were said, in order: finding in its timeline.
+  .add("GET", "/api/sessions/:id/said", ({ params, url }) => json(searchSaidIn(fleet.get(params.id!).id, url.searchParams.get("q") ?? "")))
   .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
     fleet.get(params.id!);
     if (!fleet.hasTranscript(params.id!)) return json({ turns: [], total: 0 });

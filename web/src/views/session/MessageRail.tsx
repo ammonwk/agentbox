@@ -86,6 +86,7 @@ export function MessageRail({
   turns,
   total,
   current,
+  held,
   busy,
   dark,
   onJump,
@@ -95,6 +96,9 @@ export function MessageRail({
   total: number;
   /** The message you are reading, or null at the latest. */
   current: string | null;
+  /** The first and last of them in the stretch of the conversation loaded,
+   *  when that is not all of it. */
+  held?: readonly [number, number] | null;
   /** A jump underway, to this message. */
   busy: string | null;
   /** Beside the terminal, which is dark whatever the theme. */
@@ -212,6 +216,9 @@ export function MessageRail({
         }}
       >
         <div className="mr-line" aria-hidden="true" />
+        {held && ys[held[0]] !== undefined ? (
+          <div className="mr-held" aria-hidden="true" style={{ top: ys[held[0]]! - 6, height: ys[held[1]]! - ys[held[0]]! + 12 }} />
+        ) : null}
         {turns.map((t, i) => (
           <button
             key={t.id}

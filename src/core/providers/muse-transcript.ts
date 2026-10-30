@@ -196,5 +196,11 @@ export function museFormat(ref: TranscriptRef): TranscriptFormat {
       return opened.length || closed.length ? { calls: opened, results: closed } : null;
     },
     pieces(value, index) { return records(value).flatMap((r) => piecesFor(r, index)); },
+    // `piecesFor` names an event by its record's id, or its index when it has none.
+    locate(id) {
+      const r = /^muse:(\d+)/.exec(id);
+      const own = id.split(":")[0];
+      return r ? { index: Number(r[1]) } : own && own !== "fork" ? { text: `"id":${JSON.stringify(own)}` } : null;
+    },
   };
 }

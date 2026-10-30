@@ -1285,6 +1285,12 @@ export function claudeFormat(ref: Pick<TranscriptRef, "path" | "agentSessionId">
     },
     branches: () => branches.view(),
     leafId: (leaf) => branches.idAt(leaf),
+    // `claudePieces` names an event by its record's uuid, or its index when it has none.
+    locate: (id) => {
+      const base = id.slice(0, id.lastIndexOf(":"));
+      const r = /^r(\d+)$/.exec(base);
+      return r ? { index: Number(r[1]) } : base ? { text: `"uuid":${JSON.stringify(base)}` } : null;
+    },
     facts: () => fold.facts(),
     links: claudeLinks,
     pieces: claudePieces,
