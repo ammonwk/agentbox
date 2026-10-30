@@ -204,7 +204,8 @@ export function MessageRail({
             swallow.current = false;
             return;
           }
-          // Anywhere near a dot is that dot: the dots are small, the rail is not.
+          // Anywhere near a dot is that dot: the dots are small, the rail is
+          // not. A dot itself is only clicked from the keyboard.
           if ((e.target as HTMLElement).closest(".mr-dot")) return;
           const i = nearest(e.clientY);
           if (i !== null) onJump(turns[i]!);

@@ -56,6 +56,8 @@ export interface SaidHit {
   sessionId: string;
   at: number;
   kind: "user" | "assistant";
+  /** The timeline event it was said in, to open the session at. */
+  event: string;
   /** The matching line, cut down around the match. */
   snippet: string;
 }
@@ -83,10 +85,10 @@ export function searchSaid(q: string, limit: number, include: (sessionId: string
   if (!reader) return [];
   const rows = reader
     .query(
-      `SELECT said.session, said.at, said.kind, said.text FROM said_fts JOIN said ON said.id = said_fts.rowid
+      `SELECT said.session, said.event, said.at, said.kind, said.text FROM said_fts JOIN said ON said.id = said_fts.rowid
        WHERE said_fts MATCH ? ORDER BY said_fts.rowid DESC LIMIT 2000`,
     )
-    .all(`"${needle.replaceAll('"', '""')}"`) as { session: string; at: number; kind: "user" | "assistant"; text: string }[];
+    .all(`"${needle.replaceAll('"', '""')}"`) as { session: string; event: string; at: number; kind: "user" | "assistant"; text: string }[];
   // The newest rows, not the newest mentions: sorting every match by time
   // took seconds for a common word, on the server's thread. A rarer phrase
   // has fewer matches than the limit, and those come out in time order.
@@ -96,7 +98,7 @@ export function searchSaid(q: string, limit: number, include: (sessionId: string
   for (const r of rows) {
     if (seen.has(r.session) || !include(r.session)) continue;
     seen.add(r.session);
-    out.push({ sessionId: r.session, at: r.at, kind: r.kind, snippet: snippetOf(r.text, needle) });
+    out.push({ sessionId: r.session, event: r.event, at: r.at, kind: r.kind, snippet: snippetOf(r.text, needle) });
     if (out.length >= limit) break;
   }
   return out;

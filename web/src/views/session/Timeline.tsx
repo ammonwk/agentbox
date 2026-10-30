@@ -12,7 +12,7 @@ import { AskRow, QuestionCard } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
-import { takeJump } from "./jump";
+import { onJump, takeJump } from "./jump";
 import { useFamily } from "./family";
 import { copyText, PROVIDER_LABEL, StatusDot } from "../../bits";
 import { shownStatus, titleOf } from "../../lib/board";
@@ -236,14 +236,19 @@ export function Timeline({ session }: { session: Session }) {
   // One handed over from the terminal's rail; else, with no place of yours to
   // go back to (a reload), the message you left an edit open on.
   useEffect(() => {
-    const j = takeJump(session.id);
-    if (j) {
-      setJump(j.turnId);
-      setNote(j.note ?? null);
-    } else if (!returning) {
+    const take = () => {
+      const j = takeJump(session.id);
+      if (j) {
+        setJump(j.turnId);
+        setNote(j.note ?? null);
+      }
+      return j;
+    };
+    if (!take() && !returning) {
       const open = openEdit(session.id);
       if (open) setJump(open.ev);
     }
+    return onJump((id) => id === session.id && take());
   }, [session.id, returning]);
   useEffect(() => {
     if (!note) return;

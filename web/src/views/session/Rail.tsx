@@ -7,6 +7,7 @@ import { createContext, memo, startTransition, useCallback, useContext, useEffec
 import type { AppState, LoadSample, ProviderId, Schedule } from "../../../../src/core/types";
 import { copyText, PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot, WaitGlyph } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
+import { jumpInTimeline } from "./jump";
 import {
   descendantsOf,
   EMPTY_FILTER,
@@ -1286,13 +1287,14 @@ function SaidList({ query, none, current, onMenu }: { query: string; none: strin
       <div className="rail-label">
         Said in <span>{hits.length}</span>
       </div>
-      {hits.map(({ session: s, snippet, at, kind }) => (
+      {hits.map(({ session: s, event, snippet, at, kind }) => (
         <a
           key={s.id}
           className="rail-row rail-said"
           data-nav-item
           data-nav-id={`session:${s.id}`}
-          href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
+          href={hrefOf({ page: "session", id: s.id, tab: "timeline" })}
+          onClick={() => jumpInTimeline(s.id, { turnId: event })}
           aria-current={s.id === current ? "page" : undefined}
           data-status={s.status}
           title={namedTitle(s)}

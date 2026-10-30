@@ -3494,14 +3494,10 @@ a.wk-item:hover {
   border: 0;
   border-radius: 50%;
   background: var(--dot);
-  cursor: pointer;
   transition: transform 0.12s ease;
-}
-/* The dots are small; what a click or a tap lands on is not. */
-.mr-dot::before {
-  content: "";
-  position: absolute;
-  inset: -5px -9px;
+  /* The track picks the dot a pointer means, the one whose card is up: a
+     dot's own hit area overlapped its neighbours' once they crowded. */
+  pointer-events: none;
 }
 .mr-dot[data-kind="answer"] {
   --dot: var(--mr-answer);

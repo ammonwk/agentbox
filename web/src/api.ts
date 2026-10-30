@@ -327,7 +327,7 @@ export const api = {
   /** Sessions where `q` was said, by you or the agent, the most recent mention
    *  first, from all of history; only a project's, when one is selected. */
   said: (q: string, project: string | null = null) =>
-    get<{ sessionId: string; at: number; kind: "user" | "assistant"; snippet: string; session: AppState["sessions"][number] }[]>(
+    get<{ sessionId: string; event: string; at: number; kind: "user" | "assistant"; snippet: string; session: AppState["sessions"][number] }[]>(
       `/api/sessions/said?${new URLSearchParams({ q, ...(project ? { project } : {}) })}`,
     ),
   /** One session by id, wherever in history it is. */
