@@ -143,38 +143,18 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
  * email can hold several workspaces and each is its own refresh token.
  */
 export function sameLogin(a: Pick<Account, "provider" | "email" | "home">, b: Pick<Account, "provider" | "email" | "home">): boolean {
-  if (a.provider !== b.provider) return false;
-  if (a.provider === "omp") {
-    const x = readGoLogin(a.home);
-    const y = readGoLogin(b.home);
-    return !!x && !!y && !!x.accountID && x.accountID === y.accountID && x.orgID === y.orgID;
-  }
-  return !!a.email && a.email.toLowerCase() === b.email?.toLowerCase();
+  const k = loginKey(a);
+  return k !== null && k === loginKey(b);
 }
 
-/**
- * The account this one is a second copy of: same provider, logged in as the
- * same login. Two homes on one login share one usage pool, and counting it
- * twice is how a balancer ends up placing onto a full account it thinks is
- * someone else. This happens without anyone registering anything: `/login` in
- * the default home replaces whoever was there.
- *
- * Of a pair, the one that stays is a dedicated home (it cannot drift by
- * accident), then the older; the other is the twin. So the provider's default
- * home — your plain CLI login — is a twin of whichever account you last logged
- * the CLI into, and re-logging the CLI changes only that.
- */
-export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt" | "home">>(
-  a: A,
-  all: readonly A[],
-): A | null {
-  const rank = (x: A) => [x.isDefault ? 1 : 0, x.createdAt, x.id] as const;
-  const before = (x: A, y: A) => {
-    const [p, q] = [rank(x), rank(y)];
-    return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
-  };
-  const primary = all.filter((o) => sameLogin(a, o)).sort(before)[0];
-  return primary && primary.id !== a.id ? primary : null;
+/** The login a home holds, as a string two homes share exactly when `sameLogin`
+ *  says they do; null when it holds none we can name. */
+function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
+  if (a.provider === "omp") {
+    const g = readGoLogin(a.home);
+    return g?.accountID ? `omp|${g.accountID}|${g.orgID ?? ""}` : null;
+  }
+  return a.email ? `${a.provider}|${a.email.toLowerCase()}` : null;
 }
 
 /**
@@ -184,11 +164,36 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
  * accounts keys on this, so a twin is never an account of its own anywhere.
  * A session stays pinned to its home (that is where its transcript is and
  * what resumes it); it belongs to the home's owner.
+ *
+ * Two homes on one login share one usage pool, and counting it twice is how a
+ * balancer ends up placing onto a full account it thinks is someone else. This
+ * happens without anyone registering anything: `/login` in the default home
+ * replaces whoever was there. Of a pair, the one that stays is a dedicated home
+ * (it cannot drift by accident), then the older; the other is the twin. So the
+ * provider's default home — your plain CLI login — is a twin of whichever
+ * account you last logged the CLI into, and re-logging the CLI changes only that.
  */
 export function owners<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt" | "home">>(
   all: readonly A[],
 ): Map<string, string> {
-  return new Map(all.map((a) => [a.id, twinOf(a, all)?.id ?? a.id]));
+  const rank = (x: A) => [x.isDefault ? 1 : 0, x.createdAt, x.id] as const;
+  const before = (x: A, y: A) => {
+    const [p, q] = [rank(x), rank(y)];
+    return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
+  };
+  // Each home's login is read once: the pass asks this every two seconds.
+  const keys = new Map(all.map((a) => [a.id, loginKey(a)]));
+  const primary = new Map<string, A>();
+  for (const a of all) {
+    const k = keys.get(a.id);
+    if (!k) continue;
+    const p = primary.get(k);
+    if (!p || before(a, p) < 0) primary.set(k, a);
+  }
+  return new Map(all.map((a) => {
+    const k = keys.get(a.id);
+    return [a.id, (k && primary.get(k)?.id) || a.id];
+  }));
 }
 
 /**

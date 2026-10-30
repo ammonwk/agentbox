@@ -320,7 +320,7 @@ export class AccountsService extends EventEmitter {
       return `logged in as ${id.email}, not ${account.label} — your browser was probably signed into ${id.email}; switch accounts there and log in again`;
     }
     // A CLI login that matches an account is the expected shape (see
-    // `twinOf`); only two agentbox homes on one login are a mistake.
+    // `owners`); only two agentbox homes on one login are a mistake.
     const twin = listAccounts(account.provider).find(
       (o) => o.id !== account.id && !o.isDefault && !account.isDefault && sameLogin(account, o),
     );
@@ -330,7 +330,7 @@ export class AccountsService extends EventEmitter {
   }
 }
 
-export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, owners, resyncShared, twinOf } from "./homes";
+export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, owners, resyncShared } from "./homes";
 export { identify } from "./identity";
 export { UsageService } from "./usage";
 export type { ResetConsumeResult, ResetOutcome } from "./usage";
