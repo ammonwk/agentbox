@@ -202,10 +202,15 @@ export interface Candidate {
   /** Not eligible because the provider is refusing the model here
    *  (core/refusals.ts). */
   refused?: boolean;
-  /** Not eligible on a fact rather than on claims (turned off, logged out,
-   *  refused, out of funds, a window spent): overflow, which only overrides
-   *  estimates, does not go there. */
+  /** Not eligible on a fact rather than an estimate (turned off, logged
+   *  out, its model refused, its provider stopped a session at a limit or
+   *  for want of funds): overflow, which only overrides estimates, does not
+   *  go there. */
   wall?: boolean;
+  /** Not eligible because a window reads at its limit, though its provider
+   *  has not refused a session yet: a last resort, after accounts ruled out
+   *  only by claims. */
+  atLimit?: boolean;
   /** Weekly used, and with outstanding claims added. */
   weekly: number | null;
   weeklyEffective: number | null;

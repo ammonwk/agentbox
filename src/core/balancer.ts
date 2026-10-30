@@ -45,6 +45,7 @@
 
 import { claimFor } from "./claim";
 import { coldPerWeekly } from "./rates";
+import { statedUntil, statedWaitMs } from "./retrywait";
 import type { Refusal } from "./refusals";
 import type {
   Account,
@@ -68,8 +69,9 @@ export interface AccountState {
    *  "expired" (its refresh token is past its end, or the CLI cleared it) run
    *  nothing; every session started there dies on its first call. */
   auth?: AccountAuth["state"] | null;
-  /** Its provider lately refused a session for want of funds (`unfundedSince`). */
-  unfunded?: { at: number; detail: string } | null;
+  /** Its provider lately stopped a session at a limit, or for want of
+   *  funds, and that still holds (`stoppedSince`). */
+  stopped?: { at: number; detail: string; until: number } | null;
   /** The provider is refusing the model being started to this account
    *  (`refusedRoutes`): what the sessions already on it were last told. */
   refused?: Refusal | null;
@@ -98,30 +100,45 @@ export interface PlaceRequest {
 }
 
 const HOUR = 3_600_000;
-const WEEK = 7 * 24 * HOUR;
+const DAY = 24 * HOUR;
+const WEEK = 7 * DAY;
 
-/** "402 … Insufficient account funds": the account cannot pay. OpenCode Go
- *  answers this when one of its windows is spent (it falls back to the Zen
- *  balance, which is empty), so the windows usually say it first. */
-const UNFUNDED = /\b402\b|insufficient (?:account )?(?:funds|balance|credits?)|payment required|out of credits/i;
-/** How long such a refusal rules the account out, when no window says when
- *  it resets: long enough not to feed it a session an hour, short enough that
- *  one topped up is tried again the same day. */
-export const UNFUNDED_HOLD_MS = 12 * HOUR;
+/** How far back a limit stop can still hold: a week's limit names a reset
+ *  up to a week out. */
+export const STOP_LOOKBACK_MS = 8 * DAY;
+/** How long a limit stop holds when nothing says when it lifts (a 402 for
+ *  want of funds): long enough not to feed it a session an hour, short
+ *  enough that one topped up is tried again the same day. */
+const STOP_HOLD_MS = 12 * HOUR;
 
-/** The newest refusal for want of funds among an account's limit stops, while
- *  it still holds: until `UNFUNDED_HOLD_MS` has passed, or the provider's own
- *  usage, read since, has no window at its limit (Go's 5-hour window reset). */
-export function unfundedSince(
+/**
+ * The newest of an account's limit stops (a session it ran was refused at a
+ * limit, or for want of funds), while it still holds; this, not a reading at
+ * 100%, is what rules an account out on its usage, since a provider can let a
+ * spent window run on (Claude did, at a week read 100%). It holds until a
+ * reading taken since has no window at its limit (it reset, was redeemed, or
+ * the plan grew), else until the latest reset among the windows spent since
+ * before it struck, else the wait or time it names, else `STOP_HOLD_MS`.
+ * `model` picks which model-scoped windows count.
+ */
+export function stoppedSince(
   hits: { at: number; detail: string }[],
   now: number,
   usage?: { at: number | null; windows: UsageWindow[] },
-): { at: number; detail: string } | null {
-  const hit = hits.filter((h) => UNFUNDED.test(h.detail)).sort((a, b) => b.at - a.at)[0];
-  if (!hit || now - hit.at >= UNFUNDED_HOLD_MS) return null;
-  const readSince = usage?.at != null && usage.at > hit.at && usage.windows.length > 0;
-  if (readSince && usage!.windows.every((w) => w.scope || usedNow(w, now) < 100)) return null;
-  return hit;
+  model?: string | null,
+): { at: number; detail: string; until: number } | null {
+  const hit = [...hits].sort((a, b) => b.at - a.at)[0];
+  if (!hit) return null;
+  const m = model?.toLowerCase() ?? null;
+  const windows = (usage?.windows ?? []).filter((w) => !w.scope || (m !== null && m.includes(w.scope.model.toLowerCase())));
+  const readSince = usage?.at != null && usage.at > hit.at && windows.length > 0;
+  if (readSince && windows.every((w) => usedNow(w, now) < 100)) return null;
+  const spent = windows
+    .filter((w) => w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now && w.resetsAt - (w.windowMs || WEEK) <= hit.at)
+    .map((w) => w.resetsAt!);
+  const wait = statedWaitMs(hit.detail);
+  const until = spent.length ? Math.max(...spent) : wait !== null ? hit.at + wait : (statedUntil(hit.detail, hit.at) ?? hit.at + STOP_HOLD_MS);
+  return until > now ? { ...hit, until } : null;
 }
 
 /** A day and time for a sentence: "Sun, Oct 11, 9:15 AM". */
@@ -219,9 +236,8 @@ function rates(a: number, b: number): [string, string] {
   return [a.toFixed(d), b.toFixed(d)];
 }
 
-/** At its 5-hour limit now and not resetting within the horizon (which would
- *  have raised its room): a session placed there stalls on its first turn.
- *  Claims are an estimate; this is not. */
+/** Reads at its 5-hour limit now and not resetting within the horizon (which
+ *  would have raised its room). */
 function atShortLimit(c: Candidate): boolean {
   return c.short !== null && c.short >= 100 && c.legRoom === 0;
 }
@@ -343,20 +359,20 @@ function evaluate(
     c.reason = `${req.model ?? "its model"} is refused here: ${r.sessions} sessions stand refused, the last at ${clockOf(r.at)} (${r.detail.replace(/\s+/g, " ").slice(-80)}), and none has answered since; tried again ${clockOf(r.until)}`;
   } else if (req.unmetered) {
     // Nothing of this account's will be used: no limit of its is in the way.
-  } else if (spent) {
-    // However empty its other windows read: Go's week read 0% while its
-    // month was spent, and every session placed there died on its first call.
+  } else if (state.stopped) {
+    const s = state.stopped;
     c.eligible = false;
     c.wall = true;
-    c.reason = `${spent.w.label.toLowerCase()} limit reached (${spent.used}%)${spent.w.resetsAt ? `, resets ${dayOf(spent.w.resetsAt)}` : ""}`;
-  } else if (state.unfunded) {
+    c.reason = `its provider stopped a session at ${clockOf(s.at)} (${s.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(s.until)}`;
+  } else if (spent || atShortLimit(c)) {
+    // A reading at 100% is not a refusal: a provider can let a spent window
+    // run on, so the account is a last resort (`lastResort`) until it stops
+    // a session (`stopped`). However empty its other windows read, it is
+    // read as spent: Go's week read 0% while its month was spent.
+    const [label, used, resetsAt] = spent ? [spent.w.label, spent.used, spent.w.resetsAt] : ["5-hour", c.short, c.shortResetsAt];
     c.eligible = false;
-    c.wall = true;
-    c.reason = `out of funds: its provider refused a session at ${clockOf(state.unfunded.at)} (${state.unfunded.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(state.unfunded.at + UNFUNDED_HOLD_MS)}`;
-  } else if (atShortLimit(c)) {
-    c.eligible = false;
-    c.wall = true;
-    c.reason = `5-hour limit reached (${c.short}%)`;
+    c.atLimit = true;
+    c.reason = `${label.toLowerCase()} reads ${used}%${resetsAt ? ` (resets ${dayOf(resetsAt)})` : ""}: taken only when no account has room, until its provider refuses a session`;
   } else if (runsOut(c)) {
     c.eligible = false;
     c.reason = `at its pace (+${c.shortPace}%/h) it hits its 5-hour limit at ${clockOf(c.shortRunsOutAt!)}, before it resets at ${clockOf(c.shortResetsAt!)}`;
@@ -421,10 +437,31 @@ function rank(candidates: Candidate[], now: number): Candidate[] {
 const leftOf = (c: Candidate): number => c.budget?.left ?? 100;
 
 /**
+ * The accounts a session can go to when none is eligible, best first: those
+ * ruled out only by an estimate — claims, or a reading at a limit its provider
+ * has not yet held it to — not by a fact (`Candidate.wall`), which stops a
+ * session on its first call. Merely claimed before reading at a limit; one on
+ * pace to run out after, since a measured pace is not an estimate; then the
+ * most budget left, then the most room.
+ */
+function lastResort(candidates: Candidate[]): Candidate[] {
+  return candidates
+    .filter((c) => !c.wall)
+    .sort(
+      (a, b) =>
+        Number(!!a.atLimit) - Number(!!b.atLimit) ||
+        Number(runsOut(a)) - Number(runsOut(b)) ||
+        leftOf(b) - leftOf(a) ||
+        (b.legRoom ?? 0) - (a.legRoom ?? 0),
+    );
+}
+
+/**
  * Where a session cut off at `own`'s limit can carry on: the first of the
  * other accounts, in the balancer's order, that can take a session and whose
- * budget has room for what this one claims. Null when none can take a
- * session — it stays where it is.
+ * budget has room for what this one claims; with none eligible, the first
+ * last resort (`lastResort`), since a spent reading may still run. Null when
+ * there is none — it stays where it is.
  *
  * The room is asked of this placement alone. A new session may be given an
  * account's last points (`fits`), because one that overruns them is moved
@@ -434,6 +471,7 @@ const leftOf = (c: Candidate): number => c.budget?.left ?? 100;
  */
 export function elsewhere(p: Placement, own: string): Candidate | null {
   const others = p.candidates.filter((c) => c.eligible && c.accountId !== own);
+  if (others.length === 0) return lastResort(p.candidates.filter((c) => c.accountId !== own))[0] ?? null;
   return others.find((c) => leftOf(c) >= p.claim) ?? others.reduce<Candidate | null>((best, c) => (best && leftOf(best) >= leftOf(c) ? best : c), null);
 }
 
@@ -466,23 +504,20 @@ export function place(req: PlaceRequest): Placement {
     return { ...base, accountId: null, mode: "none", why: `no ${req.provider} account is set up` };
   }
   if (eligible.length === 0) {
-    // Claims are estimates. When every account is spoken for but some still
-    // has real budget left, refusing outright would leave work undone that the
-    // accounts could in fact do — so overflow onto the least-claimed one, and
-    // say so. Only what claims ruled out is open to it: an account behind a
-    // wall (`Candidate.wall`) stops a session on its first call, estimate or
-    // not. One on pace to run out goes last: overflow is for estimates that
-    // overran, and a measured pace is not an estimate.
-    const open = candidates
-      .filter((c) => !c.wall)
-      .sort((a, b) => Number(runsOut(a)) - Number(runsOut(b)) || leftOf(b) - leftOf(a) || (b.legRoom ?? 0) - (a.legRoom ?? 0));
+    // Claims are estimates, and so is a reading at 100% (`atLimit`). When
+    // every account is ruled out by one but some may still have room,
+    // refusing outright would leave work undone that the accounts could in
+    // fact do — so overflow onto the best of them, and say so.
+    const open = lastResort(candidates);
     const least = open[0];
     if (least) {
       return {
         ...base,
         accountId: least.accountId,
         mode: "overflow",
-        why: `no ${req.provider} account has both an unclaimed budget and an open 5-hour window; ${least.label} is the least claimed${least.budget ? ` (${least.budget.label.toLowerCase()} ${least.budget.used}% used + ${round1(least.budget.effective - least.budget.used)} claimed)` : ""}`,
+        why: least.atLimit
+          ? `every ${req.provider} account reads at a limit and none has refused a session yet; trying ${least.label} (${least.reason})`
+          : `no ${req.provider} account has both an unclaimed budget and an open 5-hour window; ${least.label} is the least claimed${least.budget ? ` (${least.budget.label.toLowerCase()} ${least.budget.used}% used + ${round1(least.budget.effective - least.budget.used)} claimed)` : ""}`,
       };
     }
     // The model's doing, not the accounts': say so, since another model would go.

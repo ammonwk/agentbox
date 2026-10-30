@@ -141,8 +141,12 @@ test("a session cut off at its account's limit goes to the balancer's next accou
   const b = acct("B", { short: 5, weekly: 25, weeklyResetsIn: 5 * D });
   const c = acct("C", { short: 5, weekly: 25, weeklyResetsIn: 3 * D });
   expect(elsewhere(run([a, b, c]), "A")!.accountId).toBe("C");
+  // One that only reads at its limit may still run (Claude lets a spent week
+  // run on); one whose provider has stopped a session will not.
   const full = acct("B", { short: 100, weekly: 25, weeklyResetsIn: 5 * D });
-  expect(elsewhere(run([a, full]), "A")).toBeNull();
+  expect(elsewhere(run([a, full]), "A")!.accountId).toBe("B");
+  const stopped = { ...full, stopped: { at: NOW - H, detail: "You've hit your limit", until: NOW + H } };
+  expect(elsewhere(run([a, stopped]), "A")).toBeNull();
 });
 
 test("a session's one move goes to an account whose weekly has room for it", () => {

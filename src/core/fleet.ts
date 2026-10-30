@@ -129,7 +129,7 @@ import {
 } from "./recovery";
 import { agentboxHome } from "./paths";
 import { openReader, pruneReaderStates, saveReaderState } from "./readercache";
-import { UNFUNDED_HOLD_MS, unfundedSince } from "./balancer";
+import { STOP_LOOKBACK_MS, stoppedSince } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock, retrying } from "./attention";
@@ -2835,7 +2835,7 @@ export class Fleet extends EventEmitter {
     const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
-    const hits = rateLimitHitsSince(this.now() - UNFUNDED_HOLD_MS);
+    const hits = rateLimitHitsSince(this.now() - STOP_LOOKBACK_MS);
     const mine = all.filter((a) => owner.get(a.id) === a.id);
     // What the sessions already on this model were last told, by account.
     const refused = refusedRoutes(
@@ -2861,7 +2861,7 @@ export class Fleet extends EventEmitter {
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
           auth: this.deps.usage.authOf?.(a.id),
-          unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined),
+          stopped: stoppedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined, model),
           refused: refused.get(a.id) ?? null,
         };
       });
