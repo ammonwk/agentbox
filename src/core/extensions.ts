@@ -231,8 +231,8 @@ export class Extensions {
     const out = new Headers();
     for (const h of ["content-type", "cache-control", "location", "last-modified", "etag"]) {
       const v = res.headers.get(h);
-      // A redirect to its own root stays under its prefix.
-      if (v) out.set(h, h === "location" && v.startsWith("/") && !v.startsWith("//") ? `/x/${name}${v}` : v);
+      // A redirect is passed as it is: one to its own pages is relative (`./other`), as `/` is agentbox's.
+      if (v) out.set(h, v);
     }
     return new Response(res.body, { status: res.status, headers: out });
   }
