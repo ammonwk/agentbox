@@ -2389,7 +2389,10 @@ a.tl-sender:hover .tl-sender-name {
 .sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .sx-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .sx-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
-.sx-md th, .sx-md td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; }
+/* Prose may break anywhere, but in a cell that sets the column's minimum
+   width to one letter: the table squeezes a label column into a vertical
+   strip rather than scroll. Cells break at words, so the table scrolls. */
+.sx-md th, .sx-md td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
 .sx-md th { background: var(--sunken); font-weight: 600; white-space: nowrap; }
 .sx-md img { max-width: 100%; }
 /* An image the agent showed: shrunk to fit, full size on a click. */
