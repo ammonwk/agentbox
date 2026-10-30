@@ -174,13 +174,15 @@ why). Arming the same wait twice is one wait.
     agentbox org default org|personal
     agentbox org share <account> | unshare <account>
 
-## Extensions (your user's programs that run on agentbox: docs/extensions.md)
+## Extensions (your user's programs and app plugins on agentbox: docs/extensions.md)
 
-    agentbox ext ls            # each one, its program's state and its directory
+    agentbox ext ls            # each one: its program's state, whether it is in the app, its directory
     agentbox ext call <name> <path> [--json <file>]   # what an extension's prompt tells you
                                     # to run: its answer; it knows which session called
     agentbox ext log <name>    # the end of its program's output
     agentbox ext add <dir>     # link one in (a person's call: do it only when asked)
+    agentbox ext off|on <name> # take one out of the app and stop its program, or put it back
+                                    # (a person's call, like add)
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
 

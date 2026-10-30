@@ -9,7 +9,7 @@
  * extension in `extensions/review/`, through this same door.
  */
 
-import { createContext, useContext, useSyncExternalStore, type ReactNode } from "react";
+import { Component, createContext, useContext, useSyncExternalStore, type ReactNode } from "react";
 import type { AppState, Session } from "../../../src/core/types";
 import { api, MOCK, request } from "../api";
 import { ErrorBoundary, type IconComponent } from "../components";
@@ -148,7 +148,8 @@ export async function loadPlugins(): Promise<void> {
     return;
   }
   try {
-    const exts = (await api.extensions()).filter((x) => x.client && x.enabled);
+    // Those that come with agentbox first, so a page of yours goes after theirs in the rail.
+    const exts = (await api.extensions()).filter((x) => x.client && x.enabled).sort((a, b) => Number(b.builtIn) - Number(a.builtIn));
     loaded = exts.map((x) => ({ name: x.name, state: "loading", error: null, pages: [], commands: [], status: [], settings: [], sessionActions: [] }));
     emit();
     await Promise.all(
@@ -188,13 +189,37 @@ export function runCommand(key: string): boolean {
   return false;
 }
 
-/** One thing an extension drew, fenced off: its failure is its own. */
-export function Fenced({ ext, what, reset, children }: { ext: string; what: string; reset?: string; children: ReactNode }) {
+/** One thing an extension drew, fenced off: its failure is its own. A page or
+ *  a section says so in full; a button or a status item, which has no room
+ *  for that, as a mark that names the extension, with the error on hover. */
+export function Fenced({ ext, what, reset, small, children }: { ext: string; what: string; reset?: string; small?: boolean; children: ReactNode }) {
+  if (small) return <SmallFence ext={ext} what={what} reset={reset}>{children}</SmallFence>;
   return (
     <ErrorBoundary label={`${what} from the ${ext} extension`} resetKey={reset}>
       {children}
     </ErrorBoundary>
   );
+}
+
+class SmallFence extends Component<{ ext: string; what: string; reset?: string; children: ReactNode }, { error: Error | null; reset?: string }> {
+  state: { error: Error | null; reset?: string } = { error: null, reset: this.props.reset };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  static getDerivedStateFromProps(props: { reset?: string }, state: { error: Error | null; reset?: string }) {
+    return props.reset !== state.reset ? { error: null, reset: props.reset } : null;
+  }
+  componentDidCatch(error: Error) {
+    console.error(`agentbox: ${this.props.what} from the ${this.props.ext} extension`, error);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <span className="ext-broken" title={`${this.props.what} from the ${this.props.ext} extension crashed: ${this.state.error.message}`}>
+        ⚠ {this.props.ext}
+      </span>
+    );
+  }
 }
 
 /** What the app is showing: all of it, and the part the selected project filters to. */
@@ -214,7 +239,7 @@ export function ExtSessionActions({ session }: { session: Session }) {
     <>
       {all.flatMap((l) =>
         l.sessionActions.map((render, i) => (
-          <Fenced key={`${l.name}:${i}`} ext={l.name} what="A session button" reset={session.id}>
+          <Fenced key={`${l.name}:${i}`} ext={l.name} what="A session button" reset={session.id} small>
             {render({ session })}
           </Fenced>
         )),

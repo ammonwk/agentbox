@@ -1,21 +1,29 @@
 # Extensions
 
-An extension is a program of yours that runs on agentbox: a page of its own
-in the app, sessions it starts and talks to, whatever it remembers. It is
-yours, not agentbox's: it lives outside this checkout, so nothing personal
-reaches upstream and an agentbox update cannot break it as long as the HTTP
-API holds. Your coding agent is expected to write it, so the bar is
-flexibility, not a form: an extension is a directory of code.
+An extension is code of yours that runs on agentbox: a program that starts
+sessions and talks to them, a part in the app (pages in the rail, keys,
+buttons), or both — the way a plugin works in Obsidian. It is yours, not
+agentbox's: it lives outside this checkout, so nothing personal reaches
+upstream, and an agentbox update cannot break it as long as the HTTP API and
+`agentbox/client` hold. Your coding agent is expected to write it, so the bar
+is flexibility, not a form: an extension is a directory of code.
 
-Agentbox does three things for one, and nothing else:
+Agentbox does four things for one, and nothing else:
 
-- **It runs it.** Its program is started when the server starts and again
+- **It runs its program.** Started when the server starts and again
   whenever it exits (at once if it ran a minute, else after a backoff that
   doubles to a minute), with the environment below.
-- **It serves its page.** `/x/<name>/<path>` on agentbox is passed to the
-  program as `/<path>`, and Settings → Extensions frames `/x/<name>/`.
+- **It serves its program's page.** `/x/<name>/<path>` on agentbox is passed
+  to the program as `/<path>`, and Settings → Extensions frames `/x/<name>/`.
 - **It says who asked.** Every request it passes carries `x-agentbox-caller`
   and the program's token.
+- **It loads its client into the app.** The module `client` names is bundled
+  by the server against the app's own React and `agentbox/client`, and every
+  page of the app loads it at start (Its part in the app, below).
+
+Agentbox's own Review page is an extension of this kind, in the checkout's
+`extensions/review/`: the extensions that come with agentbox live there and
+are written against the same API as yours, nothing more.
 
 Everything else an extension does — start a session, type into one, read
 what one said, keep a conversation going, hand you a card — it does through
@@ -31,14 +39,15 @@ extension.
 
 ```
 my-ext/
-  extension.json   { "title": "My extension", "description": "…", "run": ["bun", "main.ts"] }
+  extension.json   { "title": "My extension", "description": "…", "run": ["bun", "main.ts"], "client": "client.tsx" }
   main.ts          its program (any language)
+  client.tsx       its part in the app
   …                anything else it wants
 ```
 
-`run` is an argv, not a shell line, run in the directory. Any other field in
-`extension.json` is the extension's own; agentbox reads only `title`,
-`description` and `run`.
+It has `run`, `client` or both. `run` is an argv, not a shell line, run in
+the directory. Any other field in `extension.json` is the extension's own;
+agentbox reads only `title`, `description`, `run` and `client`.
 
 It is an extension once it is in `<agentbox home>/extensions/`, as a
 directory or a link to one; its name is that entry's name. `agentbox ext add
@@ -53,7 +62,11 @@ members' copies off the same pull request.
 
 `agentbox ext ls` shows each one and its program's state, `agentbox ext log
 <name>` its output (`<agentbox home>/extensions/.state/<name>/process.log`),
-and `agentbox ext restart <name>` stops it so it starts again.
+and `agentbox ext restart <name>` stops it so it starts again. `agentbox ext
+off <name>` (or Turn off on Settings → Extensions) stops its program and
+leaves its client out of the app until `on`; it is how one that comes with
+agentbox, such as Review, is put away. One of yours with the same name as one
+that comes with agentbox is used in its place.
 
 ## Its program
 
@@ -145,6 +158,64 @@ loopback rule here it holds against mistakes and other sites, not against
 code running as you on purpose (docs/v2.md, Security). Refuse any request
 without the token (`serve` in the SDK does), so nothing reaches the program
 except through agentbox.
+
+## Its part in the app
+
+`client` names a module (TypeScript and JSX are fine) whose default export is
+called once, as each page of the app loads, with the `Plugin` it adds things
+through:
+
+```tsx
+// client.tsx
+import { type Plugin, Icon, Button, go } from "agentbox/client";
+import "./mine.css";
+
+export default function (p: Plugin) {
+  p.page({
+    id: "mine",                        // its address: #/mine, and #/mine/<rest>
+    label: "Mine",
+    icon: Icon.extension,
+    badge: (state) => state.cards.filter((c) => c.state === "open").length,   // the count on its rail entry
+    badgeTitle: (n) => `${n} open`,
+    scoped: true,                      // filtered to the project selected at the top
+    keys: [["→", "Next"]],             // its own keys, listed under its label in `?`
+    render: ({ state, rest }) => <Mine state={state} />,
+  });
+  p.command({ key: "m", label: "Open Mine", run: () => go({ page: "ext", id: "mine", rest: "" }) });
+  p.status(() => <span>✓</span>);                                  // the end of the system bar
+  p.settings({ title: "Mine", render: () => <MineSettings /> });   // a section in Settings → General
+  p.sessionAction(({ session }) => <Button size="sm">For {session.id}</Button>);   // an open session's tab bar
+}
+```
+
+`agentbox/client` (web/src/plugin/client.ts) is what it may import from the
+app: the app's parts (`Button`, `Empty`, `Icon`, `Modal`, `RelativeTime`,
+`Markdown`, `MarkdownLinks`, `ErrorBoundary`), its live state
+(`useAgentbox()`: all of it, the selected project's part, and that project),
+`call(method, path, body)` for the HTTP API, `href` and `go` for the app's
+addresses, and the domain types. It is the promise: what is there keeps
+working across agentbox's updates, and anything else in the app is the app's
+own to change. Import React as `react`; the server points it at the app's
+copy, so there is one React on the page. Anything else it imports — its own
+files, its CSS, a package in its own `node_modules` — is bundled into it.
+For the types in an editor, give the extension a `tsconfig.json` with
+`"paths": { "agentbox/client": ["<agentbox>/web/src/plugin/client.ts"] }`
+and `"jsx": "react-jsx"`.
+
+`p.data.load()` and `p.data.save(value)` keep one JSON value of its own in
+`<agentbox home>/extensions/.state/<name>/data.json`, which its program, if it
+has one, reads and writes as a file. What it shares with other people goes
+where everything shared goes: cards, sessions, the org (docs/org.md).
+
+Everything it draws is fenced: a page or section that throws says so in its
+own place, a button or status item that throws becomes a mark naming the
+extension, and a client that throws while loading, or does not build, is
+shown failed on Settings → Extensions with why. A client is loaded once per
+page load: after editing one, reload. If one breaks the app anyway, open it
+with `?safe=1`, which loads no extension's client, and turn that one off.
+
+The client runs in the app with everything the app can do, like an Obsidian
+plugin: install only what you would run yourself.
 
 ## A conversation of its own
 

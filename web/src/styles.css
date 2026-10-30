@@ -1250,6 +1250,17 @@ textarea,
   width: auto;
   min-width: 320px;
 }
+/* What an extension drew in a button's room, crashed (plugin/registry.tsx). */
+.ext-broken {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--danger);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: help;
+}
 /* What extensions add at the bar's end. */
 .sys-ext {
   display: flex;
@@ -2554,8 +2565,7 @@ kbd {
   .sidebar [data-nav-ext] { order: 2; }
   .sidebar [data-nav-id="voice"] { order: 4; }
   .sidebar [data-nav-id="accounts"] { order: 5; }
-  .sidebar [data-nav-id="skills"] { order: 6; }
-  .sidebar [data-nav-id="team"] { order: 7; }
+  .sidebar [data-nav-id="context"] { order: 6; }
   .sidebar [data-nav-id="mcps"] { order: 8; }
   .sidebar [data-nav-id="settings"] { order: 9; }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */

@@ -25,7 +25,7 @@ import { InboxBell } from "./Inbox";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { ProjectTabs } from "./ProjectTabs";
-import { Fenced, loadPlugins, pagesOf, runCommand, SeenContext, usePlugins } from "./plugin/registry";
+import { Fenced, loadPlugins, pagesOf, runCommand, SAFE, SeenContext, usePlugins } from "./plugin/registry";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -387,6 +387,12 @@ export function App() {
                 </Fenced>
               ) : !plugins.ready ? (
                 <Empty title="Loading…" />
+              ) : SAFE ? (
+                <Empty title="Extensions are not loaded" action={<a className="btn" href={location.pathname + location.hash}>Load them</a>}>
+                  <p>
+                    This page was opened with <code>?safe=1</code>, so no extension's part in the app is here.
+                  </p>
+                </Empty>
               ) : (
                 <Empty title="No such page" action={<a className="btn" href={hrefOf({ page: "extensions", name: null })}>Extensions</a>}>
                   <p>
@@ -411,7 +417,7 @@ export function App() {
             sessions={state?.sessions ?? []}
             focusAccount={focusAccount}
             slotRef={setSysbarSlot}
-            tail={plugins.loaded.flatMap((l) => l.status.map((render, i) => <Fenced key={`${l.name}:${i}`} ext={l.name} what="A status item">{render()}</Fenced>))}
+            tail={plugins.loaded.flatMap((l) => l.status.map((render, i) => <Fenced key={`${l.name}:${i}`} ext={l.name} what="A status item" small>{render()}</Fenced>))}
           />
         </ErrorBoundary>
       </div>
