@@ -3991,6 +3991,13 @@ export class Fleet extends EventEmitter {
         }
         await press(next.keys);
       }
+      // The message lands in the box a moment after the dialog closes, later
+      // the longer the conversation: cleared before then, the new text is
+      // typed after it.
+      for (let t = 0; rw.inputEmpty(screen) && t < 3_000; t += 100) {
+        await Bun.sleep(100);
+        screen = rt.capture(pane) ?? "";
+      }
       for (let i = 0; !rw.inputEmpty(screen); i++) {
         if (i === 3) throw new FleetError(409, "went back, but the old message would not clear from the input box; the Terminal tab shows where it stopped");
         await press(rw.isOpen(screen) ? ["Escape"] : ["Escape", "Escape"]);

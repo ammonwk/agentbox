@@ -27,7 +27,8 @@
  *     3. Summarize up to here
  *     4. Never mind
  *
- * Restoring puts the message back in the input box, to be replaced. Nothing
+ * Restoring puts the message back in the input box, to be replaced, a moment
+ * after the dialog closes (over 100ms in a long conversation). Nothing
  * is written to the transcript until the next message, which continues from
  * the record before the one gone back to (`branches.ts`).
  *
