@@ -41,27 +41,41 @@ function decode(p: string): string {
   }
 }
 
+/** How each core page's head parses, keyed by its `page`: the type makes every
+ *  page routePath writes as `#/<page>` parse back to itself. */
+type Parse = (a: string | undefined, b: string | undefined, parts: string[]) => Route;
+const PAGES: { [P in Exclude<Route["page"], "ext" | "session">]: Parse } = {
+  sessions: () => ({ page: "sessions" }),
+  extensions: (a) => ({ page: "extensions", name: a ?? null }),
+  accounts: (a, b) => (a === "insights" && b ? { page: "accounts", sub: "insights", account: b } : { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" }),
+  context: () => ({ page: "context" }),
+  mcps: () => ({ page: "mcps" }),
+  voice: () => ({ page: "voice" }),
+  settings: () => ({ page: "settings" }),
+};
+const HEADS: Record<string, Parse> = {
+  ...PAGES,
+  s: (a, b, parts) => {
+    if (!a) return { page: "sessions" };
+    if (b === "at" && parts[3]) return { page: "session", id: a, tab: "timeline", at: parts[3] };
+    return { page: "session", id: a, tab: SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline" };
+  },
+  // Old names: agents were what extensions replaced, and Skills became Context.
+  agents: PAGES.extensions,
+  skills: PAGES.context,
+};
+
+/** The heads the app's own pages answer to: no extension's page may take one. */
+export const CORE_HEADS: ReadonlySet<string> = new Set(Object.keys(HEADS));
+
 export function parseHash(hash: string): Route {
   const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
-  if (head === "s" && a) {
-    if (b === "at" && parts[3]) return { page: "session", id: a, tab: "timeline", at: parts[3] };
-    const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
-    return { page: "session", id: a, tab };
-  }
-  if (head === "accounts") {
-    if (a === "insights" && b) return { page: "accounts", sub: "insights", account: b };
-    return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
-  }
-  // An extension's page; agents were what extensions replaced, and old links keep working.
-  if (head === "extensions" || head === "agents") return { page: "extensions", name: a ?? null };
-  // `#/skills` is the page before it became Context; old links keep working.
-  if (head === "context" || head === "skills") return { page: "context" };
-  if (head === "mcps") return { page: "mcps" };
-  if (head === "voice") return { page: "voice" };
-  if (head === "settings") return { page: "settings" };
+  if (!head) return { page: "sessions" };
+  const core = Object.hasOwn(HEADS, head) ? HEADS[head] : undefined;
+  if (core) return core(a, b, parts);
   // Anything else is a page an extension adds, once it has loaded (or says there is none).
-  if (head && /^[a-z][a-z0-9-]{0,39}$/.test(head)) return { page: "ext", id: head, rest: parts.slice(1).join("/") };
+  if (/^[a-z][a-z0-9-]{0,39}$/.test(head)) return { page: "ext", id: head, rest: parts.slice(1).join("/") };
   return { page: "sessions" };
 }
 

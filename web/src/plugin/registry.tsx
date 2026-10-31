@@ -13,6 +13,7 @@ import { Component, createContext, useContext, useSyncExternalStore, type ReactN
 import type { AppState, Session } from "../../../src/core/types";
 import { api, MOCK, request } from "../api";
 import { ErrorBoundary, type IconComponent } from "../components";
+import { CORE_HEADS } from "../route";
 
 /** A page in the rail, at `#/<id>`. */
 export type PageDef = {
@@ -64,8 +65,6 @@ export type Loaded = {
   sessionActions: ((p: { session: Session }) => ReactNode)[];
 };
 
-/** Heads the app's own pages answer to, which no extension's page may take. */
-const CORE_PAGES = new Set(["s", "sessions", "accounts", "context", "skills", "mcps", "voice", "settings", "extensions", "agents"]);
 /** Keys the app answers to itself. */
 const CORE_KEYS = new Set(["n", "?", "/", "j", "k", "h", "l", "u", "1", "2", "3"]);
 const PAGE_ID = /^[a-z][a-z0-9-]{0,39}$/;
@@ -106,7 +105,7 @@ function plugin(l: Loaded): Plugin {
     name: l.name,
     page(def) {
       if (!PAGE_ID.test(def.id)) taken(`page id ${JSON.stringify(def.id)}: lowercase letters, digits and dashes, starting with a letter`);
-      if (CORE_PAGES.has(def.id) || loaded.some((o) => o.pages.some((p) => p.id === def.id))) taken(`a page called ${def.id} is already there`);
+      if (CORE_HEADS.has(def.id) || loaded.some((o) => o.pages.some((p) => p.id === def.id))) taken(`a page called ${def.id} is already there`);
       l.pages.push(def);
       emit();
     },
