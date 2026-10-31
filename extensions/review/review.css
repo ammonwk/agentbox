@@ -193,6 +193,9 @@
   display: grid;
   gap: 6px;
   padding: 10px 12px;
+  /* As on the short version: what does not fit fades, and the fade falls on the padding when it all does. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
   border-radius: var(--radius);
   background: var(--sunken);
   font-size: 13.5px;
