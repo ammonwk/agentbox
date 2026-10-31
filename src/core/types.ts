@@ -1442,7 +1442,9 @@ export interface Card {
   long?: string | null;
   /** The pull request it is about, a URL. */
   pr: string | null;
-  /** What the asker would do. */
+  /** The choices on offer, Markdown, each saying what it does. On the card itself. */
+  options: string[];
+  /** What the asker would do, and why. Approving it is the answer "go with your recommendation". */
   recommend: string | null;
   /** What the asker does if `defaultAt` passes unanswered; agentbox only shows it. */
   default: string | null;

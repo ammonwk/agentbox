@@ -351,12 +351,24 @@ function CardLinks({ card, children }: { card: Card; children: ReactNode }) {
   );
 }
 
-/** What the asker would do, and what it does unasked once its time passes. */
+/** What is being suggested: the choices, what the asker would do, and what it does unasked once its time passes. */
 function Leaning({ card }: { card: Card }) {
   const passed = card.defaultAt !== null && card.defaultAt <= Date.now();
-  if (!card.recommend && !card.default) return null;
+  if (!card.options.length && !card.recommend && !card.default) return null;
   return (
     <div className="card-leaning">
+      {card.options.length ? (
+        <div>
+          <strong>Options</strong>
+          <ol className="card-options">
+            {card.options.map((o, i) => (
+              <li key={i}>
+                <Markdown inline text={o} />
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
       {card.recommend ? (
         <p>
           <strong>Recommended</strong> <Markdown inline text={card.recommend} />
@@ -622,6 +634,13 @@ function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => voi
             <Icon.check size={13} /> Go with the recommendation
           </button>
         ) : null}
+        {card.options.map((o, i) => (
+          <button key={i} type="button" className="review-take" onClick={() => setText(o)}>
+            <span>
+              {i + 1}. <Markdown inline text={o} />
+            </span>
+          </button>
+        ))}
         <textarea
           className="input review-answer-box"
           autoFocus

@@ -1412,6 +1412,7 @@ const router = new Router(mapError)
         short: requireString(b, "short"),
         long: optionalString(b, "long"),
         pr: optionalString(b, "pr"),
+        options: Array.isArray(b.options) ? b.options.filter((o): o is string => typeof o === "string") : [],
         recommend: optionalString(b, "recommend"),
         default: optionalString(b, "default"),
         defaultAt: typeof b.defaultAt === "number" ? b.defaultAt : null,

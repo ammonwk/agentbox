@@ -31,8 +31,10 @@ export async function card(api: Api, args: string[]): Promise<number> {
 }
 
 async function add(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["kind", "title", "short", "long", "long-file", "pr", "recommend", "default", "default-at", "key", "for"], []);
+  const { flags, rest } = parseArgs(args, ["kind", "title", "short", "long", "long-file", "pr", "option", "recommend", "default", "default-at", "key", "for"], []);
   if (rest.length) throw new Error(`unexpected argument "${rest[0]}": a card's parts are options (--title, --short, …)`);
+  // --option comes any number of times, and parseArgs keeps one value for a flag.
+  const options = args.flatMap((a, i) => (a === "--option" ? [args[i + 1]!] : a.startsWith("--option=") ? [a.slice("--option=".length)] : []));
   const need = (k: string): string => {
     const v = str(flags.get(k));
     if (!v?.trim()) throw new Error(`card add needs --${k}`);
@@ -54,6 +56,7 @@ async function add(api: Api, args: string[]): Promise<number> {
     short: need("short"),
     long: file ? readFileSync(file === "-" ? 0 : file, "utf8") : str(flags.get("long")),
     pr: str(flags.get("pr")),
+    options,
     recommend: str(flags.get("recommend")),
     default: str(flags.get("default")),
     defaultAt,
@@ -99,6 +102,7 @@ async function show(api: Api, args: string[]): Promise<number> {
       ["pr", c.pr],
       ["added", when(c.createdAt)],
       ["short", c.short],
+      ["options", c.options.map((o, i) => `${i + 1}. ${o}`).join("\n") || null],
       ["recommend", c.recommend],
       ["default", c.default ? `${c.default}${c.defaultAt ? ` (${c.defaultAt <= Date.now() ? "passed" : "at"} ${when(c.defaultAt)})` : ""}` : null],
       ["answer", c.state === "answered" ? (c.answer ? c.answer : "(seen, nothing said)") : null],

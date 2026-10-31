@@ -37,7 +37,7 @@ const SHORT_MAX = 1200;
 const LONG_MAX = 200_000;
 
 type Row = {
-  id: number; kind: CardKind; title: string; short: string; long: string | null; pr: string | null; recommend: string | null;
+  id: number; kind: CardKind; title: string; short: string; long: string | null; pr: string | null; options: string | null; recommend: string | null;
   default_text: string | null; default_at: number | null; key: string | null; session_id: string | null; about: string | null;
   state: CardState; answer: string | null; answered_at: number | null; delivered_at: number | null; tried_at: number | null;
   later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
@@ -46,7 +46,7 @@ type Row = {
 function toCard(r: Row, withLong: boolean): Card {
   return {
     id: r.id, kind: r.kind, title: r.title, short: r.short, hasLong: !!r.long, ...(withLong ? { long: r.long } : {}),
-    pr: r.pr, recommend: r.recommend, default: r.default_text, defaultAt: r.default_at, key: r.key,
+    pr: r.pr, options: r.options ? (JSON.parse(r.options) as string[]) : [], recommend: r.recommend, default: r.default_text, defaultAt: r.default_at, key: r.key,
     sessionId: r.session_id, about: r.about, state: r.state, answer: r.answer, answeredAt: r.answered_at,
     deliveredAt: r.delivered_at, unread: r.state === "answered" && !!r.answer && r.delivered_at === null,
     laterAt: r.later_at, createdAt: r.created_at, closedWhy: r.closed_why,
@@ -59,6 +59,7 @@ export interface NewCard {
   short: string;
   long?: string | null;
   pr?: string | null;
+  options?: string[];
   recommend?: string | null;
   default?: string | null;
   defaultAt?: number | null;
@@ -152,10 +153,11 @@ export class Cards {
       if (have) return toCard(have, false);
     }
     const text = (v: string | null | undefined, max = SHORT_MAX) => v?.trim().slice(0, max) || null;
+    const options = (c.options ?? []).map((o) => text(o)).filter(Boolean);
     const { lastInsertRowid } = getDb().run(
-      `INSERT INTO cards (kind, title, short, long, pr, recommend, default_text, default_at, key, session_id, about, state, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
-      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, Math.min(c.at ?? this.now(), this.now())],
+      `INSERT INTO cards (kind, title, short, long, pr, options, recommend, default_text, default_at, key, session_id, about, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), options.length ? JSON.stringify(options) : null, text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, Math.min(c.at ?? this.now(), this.now())],
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();

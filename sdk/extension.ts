@@ -117,7 +117,7 @@ export const agentbox = {
   pin: (id: string, order: number | null = Date.now()) => call("PATCH", `/api/sessions/${id}`, { pinOrder: order }),
   /** What `from` holds goes to `to`: its children, cards, PRs and their waits, and messages to it. */
   handover: (from: string, to: string, close = false) => call("POST", `/api/sessions/${from}/handover`, { to, close }),
-  card: (c: { kind: "decision" | "note" | "merged"; title: string; short: string; long?: string; pr?: string; recommend?: string; default?: string; defaultAt?: number; key?: string; session?: string; about?: string; notify?: boolean }) =>
+  card: (c: { kind: "decision" | "note" | "merged"; title: string; short: string; long?: string; pr?: string; options?: string[]; recommend?: string; default?: string; defaultAt?: number; key?: string; session?: string; about?: string; notify?: boolean }) =>
     call<Card>("POST", "/api/cards", c),
   /** Withdraw a card. */
   closeCard: (id: number, why: string) => call<Card>("POST", `/api/cards/${id}/close`, { why }),

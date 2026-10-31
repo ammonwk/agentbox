@@ -491,6 +491,8 @@ export const MIGRATIONS: readonly string[] = [
   DELETE FROM schedules WHERE agent IS NOT NULL;
   ALTER TABLE schedules DROP COLUMN agent;
   `,
+  // 41 — the choices a decision offers, a JSON array, so the card can show them.
+  `ALTER TABLE cards ADD COLUMN options TEXT;`,
 ];
 
 function migrate(d: Database) {

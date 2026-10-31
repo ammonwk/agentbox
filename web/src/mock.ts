@@ -302,13 +302,14 @@ const schedules: Schedule[] = [
 ];
 
 const card = (c: Pick<Card, "id" | "kind" | "title" | "short"> & Partial<Card>): Card => ({
-  hasLong: true, pr: null, recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, state: "open",
+  hasLong: true, pr: null, options: [], recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, state: "open",
   answer: null, answeredAt: null, deliveredAt: null, unread: false, laterAt: null, createdAt: T0 - 40 * M, closedWhy: null, ...c,
 });
 const cards: Card[] = [
   card({
     id: 3, kind: "decision", title: "Count multi-year agreements as one sale?",
     short: "One customer counts only signed agreements as won. The open PR counts every multi-year row. Which should every org get?",
+    options: ["Signed only: rows without a signature stop counting as won", "Every multi-year row: the PR as written"],
     recommend: "Signed only: it matches what they audit against, and the PR is a one-line change either way.",
     default: "leave the PR unmerged", defaultAt: T0 + 20 * H, pr: "https://github.com/you/agentbox/pull/212",
   }),

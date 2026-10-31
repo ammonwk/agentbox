@@ -165,8 +165,9 @@
   overflow-wrap: anywhere;
 }
 .card-short {
-  flex: 0 1 auto;
-  min-height: 0;
+  /* On a short screen this gives way first, down to a few lines: the choices are what you came for. */
+  flex: 0 100 auto;
+  min-height: 5.5em;
   overflow: hidden;
   font-size: 15px;
   line-height: 1.5;
@@ -185,7 +186,10 @@
   margin-bottom: 0;
 }
 .card-leaning {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  align-content: start;
   display: grid;
   gap: 6px;
   padding: 10px 12px;
@@ -205,6 +209,13 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--faint);
+}
+.card-options {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+  overflow-wrap: anywhere;
 }
 .card-default-passed strong {
   color: var(--warning);
@@ -480,13 +491,15 @@
   align-items: center;
   gap: 6px;
   min-height: 34px;
-  padding: 0 12px;
+  padding: 5px 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: 17px;
   background: none;
   color: var(--text);
   font: inherit;
   font-size: 13px;
+  text-align: left;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 .review-take:hover {

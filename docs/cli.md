@@ -142,13 +142,18 @@ why). Arming the same wait twice is one wait.
     agentbox schedules              # what is set to start: id  in  when · provider · title,
                                     # and its command and its last note
     agentbox unschedule <id>...     # it will not start
-    agentbox card add --kind decision --title T --short S [--long-file F] [--recommend R] [--pr URL]
+    agentbox card add --kind decision --title T --short S [--option O]... [--recommend R] [--long-file F] [--pr URL]
                       [--default D --default-at 'in 24 hours'] [--key K] [--for <session>]
                                     # hand the user a card on the app's Review page and
                                     # print its id. kind: decision (they owe an answer),
-                                    # merged, note (it happened). --short is two or three
-                                    # sentences; --long-file the long, extra clear version
-                                    # in Markdown. --key adds it once, however often you run it
+                                    # merged, note (it happened). The card is all they may
+                                    # read, so it must say what you are suggesting: --short is
+                                    # two or three sentences; --option, once per choice, what
+                                    # that choice does; --recommend which one and why, and
+                                    # without it they cannot approve in one gesture.
+                                    # --long-file is only the evidence behind that, in
+                                    # Markdown: do not repeat the card there.
+                                    # --key adds it once, however often you run it
     agentbox card list [--open|--later|--answered [--unread]|--closed] [--json]
     agentbox card show <id>         # all of it, with the answer
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
