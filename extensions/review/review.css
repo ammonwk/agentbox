@@ -165,13 +165,16 @@
   overflow-wrap: anywhere;
 }
 .card-short {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+}
+/* The card is one screen, so what it says has to give way; the long version scrolls and shows it all. */
+.card-review .card-short {
   /* On a short screen this gives way first, down to a few lines: the choices are what you came for. */
   flex: 0 100 auto;
   min-height: 5.5em;
   overflow: hidden;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--text);
   /* What does not fit is under the long version; fade rather than cut a line in half. */
   mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
@@ -186,20 +189,22 @@
   margin-bottom: 0;
 }
 .card-leaning {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  align-content: start;
   display: grid;
   gap: 6px;
   padding: 10px 12px;
-  /* As on the short version: what does not fit fades, and the fade falls on the padding when it all does. */
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
   border-radius: var(--radius);
   background: var(--sunken);
   font-size: 13.5px;
   line-height: 1.45;
+}
+.card-review .card-leaning {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  align-content: start;
+  /* As on the short version: what does not fit fades, and the fade falls on the padding when it all does. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
 }
 .card-leaning p {
   margin: 0;
@@ -434,12 +439,6 @@
   flex-direction: column;
   gap: 12px;
   padding: 4px 2px 12px;
-}
-.review-long-body .card-short {
-  flex: none;
-  overflow: visible;
-  mask-image: none;
-  -webkit-mask-image: none;
 }
 .review-long-body .card-source {
   margin-top: 0;
