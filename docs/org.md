@@ -13,7 +13,11 @@ The code is `src/core/org/` (config, seal, store, accounts, skills, and the
 **The store.** One MongoDB database, `agentbox_plaibook` on the nonprod Atlas
 cluster, reached with a database user (`agentbox-plaibook`) that can touch only
 that database. Every member's machine calls out to it, polling; nothing calls
-in. Two collections:
+in. A store that only admits a SOCKS5 proxy takes the driver's own URI
+options, `?proxyHost=127.0.0.1&proxyPort=<port>` (the `socks` dependency is
+what makes them work; without it the driver hangs). The invite carries the
+URI as it is, so every member then needs that proxy at that address. Two
+collections:
 
 | collection | a row | written by |
 |---|---|---|
