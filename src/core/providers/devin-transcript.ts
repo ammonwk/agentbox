@@ -42,6 +42,7 @@ import { countPrRepos, countSlugs, mostNamed, prReposIn } from "../prrepo";
 import { addUsage, emptyTotals } from "../pricing";
 import type { DevinPrompt, DevinSessionRow } from "./devin-db";
 import { bridgedModel } from "../../bridge/models";
+import { messageTail } from "../turnstatus";
 
 function clip(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -210,7 +211,7 @@ export function parseAtif(doc: unknown): AtifParse {
     if (said.trim()) {
       out.events.push({ id: `${base}.m`, at, kind: "assistant", text: said });
       const t = said.trim();
-      out.lastMessage = t.length > 300 ? `…${t.slice(-299)}` : t;
+      out.lastMessage = messageTail(t);
     }
     const results = new Map<string, string>();
     for (const r of Array.isArray(s.observation?.results) ? s.observation.results : []) {

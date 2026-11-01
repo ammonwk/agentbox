@@ -23,6 +23,7 @@ import type { TranscriptFacts, TranscriptRef, Wake } from "./types";
 import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
 import { claudeCacheTtl, isKeepWarmNote, type WarmSpell } from "../cache";
+import { messageTail } from "../turnstatus";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -882,7 +883,7 @@ export class ClaudeFold {
       }
     }
     const text = blocksText(m.content).trim();
-    if (text) this.lastMessage = text.length > 300 ? `…${text.slice(-299)}` : text;
+    if (text) this.lastMessage = messageTail(text);
     // `end_turn`/`stop_sequence` hand back to you, and so does a `refusal`
     // (the CLI retries only if the provider falls back); `tool_use` waits on a
     // tool, and null is a block written before the message finished.

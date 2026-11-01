@@ -4,6 +4,7 @@
  * `children[].record_json`; omitted-live-only markers carry no conversation. */
 import type { TranscriptFacts, TranscriptRef } from "./types";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type TranscriptFormat } from "./jsonl-reader";
+import { messageTail } from "../turnstatus";
 
 const str = (v: unknown): string => typeof v === "string" ? v : "";
 const num = (v: unknown): number => typeof v === "number" && Number.isFinite(v) ? v : 0;
@@ -126,7 +127,7 @@ export function museFormat(ref: TranscriptRef): TranscriptFormat {
         if (r.payload_type === "session.fork.turn" && p.turn) {
           const t = p.turn;
           prompt(str(t.prompt), Math.floor(num(t.source?.started_recorded_at) / 1000));
-          if (str(t.answer)) facts.lastMessage = t.answer.slice(-300);
+          if (str(t.answer)) facts.lastMessage = messageTail(t.answer);
         }
         if (p.kind !== "run" || !p.event) continue;
         const e = p.event;
@@ -141,7 +142,7 @@ export function museFormat(ref: TranscriptRef): TranscriptFormat {
             prompt(str(e.body), at);
             break;
           case "assistant_message_committed":
-            if (str(e.text)) facts.lastMessage = e.text.slice(-300);
+            if (str(e.text)) facts.lastMessage = messageTail(e.text);
             break;
           case "assistant_tool_calls_committed":
           case "tool_result_batch_committed":

@@ -28,6 +28,7 @@ import { loadFields, saveFields } from "./foldstate";
 import { oneLine, tidyPath } from "./claude-transcript";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import type { TranscriptFacts, TranscriptRef } from "./types";
+import { messageTail } from "../turnstatus";
 
 const ms = (t: unknown): number | null => {
   if (typeof t !== "string") return null;
@@ -312,7 +313,7 @@ export class CodexFold {
         // The tail is where a session's STATUS line is: not the memory
         // citation Codex closes an answer with.
         const said = text.replace(MEM_CITE, "").trim();
-        if (said) this.lastMessage = said.length > 300 ? `…${said.slice(-299)}` : said;
+        if (said) this.lastMessage = messageTail(said);
         this.prRepo.add(text);
       } else if (p.type === "function_call" || p.type === "custom_tool_call") {
         // A JSON string of the arguments; unescaped so `-R "owner/name"` reads as typed.

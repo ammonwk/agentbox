@@ -36,6 +36,7 @@ import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, inse
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
+import { openAsks } from "./cards";
 import { unfinishedClaims } from "./prclaims";
 import { describeRule, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import { listScheduledSessions, markScheduled } from "./schedule-sessions";
@@ -323,15 +324,17 @@ export class Scheduler {
   /**
    * Close finished sessions once their last message is an hour old: the ones
    * a schedule started and no longer speaks to, and the ones another session
-   * started (`finished`), unless one has a session of its own still open or
-   * you pinned or bookmarked it.
+   * started (`finished`), unless one has a session of its own still open, a
+   * decision still with you (its answer comes back to it), or you pinned or
+   * bookmarked it. A wait for your answer is not the red schedule's: it does
+   * not hold a new streak back, so `finished` itself does not count it.
    */
   private async closeFinished(now: number): Promise<void> {
     const sessions = this.fleet.sessions();
     const open = new Set(sessions.filter((s) => s.closedAt === null && s.status !== "closed").map((s) => s.id));
     const parents = new Set(sessions.filter((s) => open.has(s.id) && s.parent).map((s) => s.parent!));
     const scheduled = new Set(listScheduledSessions().map((r) => r.sessionId));
-    const claims = unfinishedClaims();
+    const claims = new Map([...unfinishedClaims(), ...openAsks()]);
     let closed = false;
     for (const s of sessions) {
       if (!open.has(s.id) || parents.has(s.id)) continue;

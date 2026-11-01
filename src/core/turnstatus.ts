@@ -3,6 +3,21 @@
  *  that ended done) and the web (a check mark on its row, and the line drawn
  *  as a quiet footer under the message rather than as prose). */
 
+/** How much of a session's last message its record keeps, and the longest last line kept whole. */
+const TAIL = 300;
+const LINE_MAX = 2000;
+
+/** What a session's record keeps of its last message: its end, and all of its
+ *  last line. A `STATUS:` line the cut began inside would read as no status at
+ *  all, so nothing holds the session and the board shows no ask, and asks run
+ *  long: in the 14 days to 11-01, 17 of about 58 passed 300 characters. */
+export function messageTail(text: string): string {
+  const t = text.trim();
+  if (t.length <= TAIL) return t;
+  const line = t.slice(t.lastIndexOf("\n") + 1);
+  return line.length >= TAIL && line.length <= LINE_MAX ? line : `…${t.slice(1 - TAIL)}`;
+}
+
 export type TurnStatusKind = "done" | "waiting" | "needs" | "other";
 
 export interface TurnStatus {

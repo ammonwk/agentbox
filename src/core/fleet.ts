@@ -62,6 +62,7 @@ import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeFor
 import { setUpWorktree } from "./setup";
 import { ensureCheckout } from "./worktrees";
 import { describe as describeWait, TELL_FOR_MS } from "./waits";
+import { openAsks } from "./cards";
 import { prReleaseLine, prReleaseTold, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
@@ -2441,8 +2442,8 @@ export class Fleet extends EventEmitter {
     // A stopped child was a call in its parent's run — a pool agent, a
     // teammate, a `codex exec` from a Bash tool: listed while that run goes
     // on, then history (resumable by id), never stranded at the root of the
-    // board or piled under a caller that has stopped. One with a wait armed or
-    // a claim on an open PR is parked work, not a finished call: hiding it drops the claim.
+    // board or piled under a caller that has stopped. One with a wait armed, a
+    // claim on an open PR or a decision open is parked work, not a finished call.
     else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
@@ -4227,9 +4228,11 @@ export class Fleet extends EventEmitter {
   }
 
   /** What each session has going that a stop must not drop unseen: its
-   *  waits still armed, and the PRs it claimed that are not finished. */
+   *  waits still armed, the PRs it claimed that are not finished, and the
+   *  decisions it asked that have no answer yet. */
   private workHeld(): Map<string, string[]> {
     const out = unfinishedClaims();
+    for (const [id, cards] of openAsks()) out.set(id, [...(out.get(id) ?? []), ...cards]);
     for (const w of listOpenWaits(0)) if (!w.ended) out.set(w.sessionId, [...(out.get(w.sessionId) ?? []), `wait ${w.id}`]);
     return out;
   }
@@ -4645,7 +4648,7 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: str
     firstPrompt: f.firstPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
     lastPrompt: f.lastPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
     lastPromptAt: f.lastPromptAt,
-    lastMessage: f.lastMessage?.slice(0, 300) ?? null,
+    lastMessage: f.lastMessage ?? null,
     model: f.model,
     gitBranch: f.gitBranch,
     prRepo: f.prRepo ?? null,

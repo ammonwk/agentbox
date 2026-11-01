@@ -26,6 +26,7 @@ import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 import { countPrRepos } from "../prrepo";
 import { askQuestionsOf } from "./ask";
+import { messageTail } from "../turnstatus";
 
 /** Prompts are previews, capped as Claude's and Codex's are: a board row
  *  carries them on every push. */
@@ -365,7 +366,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
         }
       }
       const said = textOf(m.content).trim();
-      if (said) s.lastMessage = said.length > 300 ? `…${said.slice(-299)}` : said;
+      if (said) s.lastMessage = messageTail(said);
       s.turnError = null;
       if (m.stopReason === "error") {
         const who = [m.provider, m.model].filter((x) => typeof x === "string" && x).join("/");
