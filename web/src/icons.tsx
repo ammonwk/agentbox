@@ -21,6 +21,7 @@ import { Paperclip } from "@phosphor-icons/react/dist/csr/Paperclip";
 import { PaperPlaneTilt } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
 import { X } from "@phosphor-icons/react/dist/csr/X";
+import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { CaretRight } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CaretLeft } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -100,6 +101,7 @@ export const Icon = {
   paperclip: icon(Paperclip),
   check: icon(Check),
   x: icon(X),
+  dots: icon(DotsThree),
   chevronRight: icon(CaretRight),
   chevronLeft: icon(CaretLeft),
   chevronDown: icon(CaretDown),

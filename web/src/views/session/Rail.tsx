@@ -32,13 +32,14 @@ import {
   type SortKey,
 } from "../../lib/board";
 import { baseName, fmtBytes } from "../../lib/format";
-import { openingTab, usePickedTab } from "../../lib/phone";
+import { openingTab, useIsPhone, usePickedTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf, type SessionTab } from "../../route";
 import { useScope } from "../../lib/projects";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { movePin, toggleBookmark, togglePin } from "./pins";
+import { RowSwipe } from "./rowswipe";
 import { ScheduledRow } from "./Scheduled";
 import { OrgSessions } from "./OrgSessions";
 import { endedDone, turnStatus } from "../../../../src/core/turnstatus";
@@ -532,6 +533,13 @@ export function Rail({
               : "Drop on a session to put it under that one"}
         </div>
       ) : null}
+      <RowSwipe
+        sessions={state.sessions}
+        rowOf={(id) => state.sessions.find((x) => x.id === id) ?? closedSessions.get(id)}
+        onClose={onClose}
+        onPin={(s) => togglePin(s, state.sessions)}
+        onMore={(s) => onMenu(s, 0, 0)}
+      />
       {menu ? (
         <RowMenu
           s={state.sessions.find((x) => x.id === menu.id) ?? menu.fallback}
@@ -1036,7 +1044,11 @@ function SortMenu({ list }: { list: ListState }) {
 /** A row's right-click menu: pin it, bookmark it. */
 function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: readonly SessionRow[]; x: number; y: number; onDone: () => void }) {
   const wrap = useRef<HTMLDivElement>(null);
-  useDismiss(true, onDone, [wrap]);
+  // On a phone a sheet from the bottom edge, over a backdrop that takes the tap
+  // that dismisses it, so that tap does not also open the row under it.
+  const phone = useIsPhone();
+  const shade = useRef<HTMLDivElement>(null);
+  useDismiss(true, onDone, [wrap, shade]);
   // Kept on screen: a right-click near the foot or the edge opens it upward or leftward.
   const [at, setAt] = useState({ left: x, top: y });
   useLayoutEffect(() => {
@@ -1045,7 +1057,8 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
     setAt({ left: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)), top: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) });
   }, [x, y]);
   useEffect(() => {
-    wrap.current?.querySelector<HTMLElement>("button")?.focus();
+    if (!phone) wrap.current?.querySelector<HTMLElement>("button")?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const pick = (act: () => void) => () => {
     act();
@@ -1057,9 +1070,13 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
     onDone();
     if (next !== (s.label ?? titleOf(s))) api.patchSession(s.id, { label: next || null }).catch((e: Error) => reportFailure(s.id, titleOf(s), "rename", e.message));
   };
+  const where = phone ? undefined : ({ position: "fixed", ...at } as const);
+  const backdrop = phone ? <div ref={shade} className="rail-sheet-shade" onClick={onDone} /> : null;
   if (draft !== null) {
     return (
-      <div ref={wrap} className="rail-menu rail-rowmenu" style={{ position: "fixed", ...at }}>
+      <>
+      {backdrop}
+      <div ref={wrap} className="rail-menu rail-rowmenu" style={where}>
         <input
           className="rail-rename"
           aria-label="Session name"
@@ -1078,10 +1095,13 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
           }}
         />
       </div>
+      </>
     );
   }
   return (
-    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={shownTitle(s)} style={{ position: "fixed", ...at }}>
+    <>
+    {backdrop}
+    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={shownTitle(s)} style={where}>
       <div className="rail-menu-label">{shownTitle(s)}</div>
       <button type="button" role="menuitem" onClick={() => setDraft(s.label ?? titleOf(s))}>
         <span className="rail-menu-check">
@@ -1102,6 +1122,7 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
         {s.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
       </button>
     </div>
+    </>
   );
 }
 
