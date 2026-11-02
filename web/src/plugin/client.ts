@@ -49,12 +49,15 @@ export function useAgentbox(): { state: AppState; scoped: AppState; project: str
 /**
  * Makes the `Markdown` inside it link what it names, as the app's own text
  * does: a session's id opens that session, and `#123` the pull request, in
- * the repo of `pr` (a pull request's URL), else of `session`'s.
+ * the repo of `pr` (a pull request's URL), else of `session`'s. Images in it
+ * are `session`'s files, shown and opened full size on a click.
  */
 export function MarkdownLinks({ session, pr, children }: { session?: string | null; pr?: string | null; children: ReactNode }) {
   const { state } = useSeen();
   const resolved = useResolvedSessions();
-  const links = useMemo(() => ({ index: withResolved(buildSessionIndex(state.sessions), resolved), self: null }), [state.sessions, resolved]);
+  // The asker is the session being read: its images and image paths are read
+  // from where it ran, so they show and open as in its timeline.
+  const links = useMemo(() => ({ index: withResolved(buildSessionIndex(state.sessions), resolved), self: session ?? null }), [state.sessions, resolved, session]);
   const base = useMemo(() => {
     const own = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+/.exec(pr ?? "")?.[1];
     const asker = state.sessions.find((x) => x.id === session);
