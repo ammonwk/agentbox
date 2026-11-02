@@ -416,6 +416,7 @@ export class CodexFold {
       agentSessionId: this.ref.agentSessionId,
       spawnSessionId: /^agentbox-([a-z0-9]{8})-[0-9a-f-]{36}$/.exec(l?.originator ?? "")?.[1] ?? null,
       cwd: this.cwd,
+      headless: l?.source === "exec",
       // `codex resume` finds a session by id from anywhere, but started from
       // another directory it stops to ask which one to use; the session's
       // own directory skips the question.
