@@ -4026,10 +4026,9 @@ a.wk-item:hover {
   }
   /* Let go now and the outermost is done: it takes the width, its words at the
      row's edge, where the finger brought them. */
-  .rail-row[data-swipe-full] .rail-swipe-more,
-  .rail-row[data-swipe="leave"] .rail-swipe-more {
+  .rail-row[data-swipe-full] .rail-swipe-more {
     flex: 0 0 0;
-    margin-right: -6px;
+    margin-left: -6px;
   }
   .rail-row[data-swipe-full] .rail-swipe-close {
     align-items: flex-start;

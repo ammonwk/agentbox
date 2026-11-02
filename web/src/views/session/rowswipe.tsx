@@ -1,5 +1,5 @@
 /** Swiping a row of the session list on a phone, as Mail's list does: left for
- *  More and Close, right for Pin, far enough to do the outermost one outright;
+ *  Close, right for Pin and More, far enough to do the outermost one outright;
  *  and holding it for the row's menu, which iOS would never fire `contextmenu`
  *  for. One listener for every row, and one row carrying the buttons at a time:
  *  they are portalled into that row, so they move with it if the list reorders.
@@ -47,7 +47,8 @@ type Gesture = {
   hold?: ReturnType<typeof setTimeout>;
 };
 
-/** Close is what a subagent's row and a closed row do not have, as on a computer. */
+/** Close is what a subagent's row and a closed row do not have, as on a computer,
+ *  so a left swipe gives them nothing. */
 const closable = (s: SessionRow) => s.host !== "subagent" && s.status !== "closed";
 const place = (el: HTMLElement, px: number) => el.style.setProperty("--swipe", `${px}px`);
 
@@ -68,9 +69,8 @@ export function RowSwipe(props: {
 
   // Asks first, in the dialog that says which: closing would stop those too.
   const holdsWork = (s: SessionRow) => runningDescendants(s, latest.current.sessions).length > 0;
-  const widthOf = (s: SessionRow, side: Side) => (side === "left" && closable(s) ? 2 * BUTTON_PX : BUTTON_PX);
-  // A running session is mid-turn, and a finger that went too far should not cut it short.
-  const canFull = (s: SessionRow, side: Side) => side === "right" || (closable(s) && s.status !== "running" && !holdsWork(s));
+  const widthOf = (s: SessionRow, side: Side) => (side === "right" ? 2 * BUTTON_PX : closable(s) ? BUTTON_PX : 0);
+  const canFull = (s: SessionRow, side: Side) => side === "right" || closable(s);
 
   const clear = (c: Carried) => {
     clearTimeout(c.timer);
@@ -274,24 +274,22 @@ export function RowSwipe(props: {
   return createPortal(
     <div className="rail-swipe" data-side={side} role="group" aria-label="Actions">
       {side === "right" ? (
-        <button type="button" className="rail-swipe-pin" onClick={tap(pin)}>
-          <Icon.pin size={18} />
-          {s.pinOrder !== null ? "Unpin" : "Pin"}
-        </button>
-      ) : (
         <>
+          <button type="button" className="rail-swipe-pin" onClick={tap(pin)}>
+            <Icon.pin size={18} />
+            {s.pinOrder !== null ? "Unpin" : "Pin"}
+          </button>
           <button type="button" className="rail-swipe-more" onClick={tap(more)}>
             <Icon.dots size={18} />
             More
           </button>
-          {closable(s) ? (
-            <button type="button" className="rail-swipe-close" onClick={tap(close)}>
-              <Icon.x size={18} />
-              {s.status === "running" ? "Stop & close" : "Close"}
-            </button>
-          ) : null}
         </>
-      )}
+      ) : closable(s) ? (
+        <button type="button" className="rail-swipe-close" onClick={tap(close)}>
+          <Icon.x size={18} />
+          {s.status === "running" ? "Stop & close" : "Close"}
+        </button>
+      ) : null}
     </div>,
     el,
   );
