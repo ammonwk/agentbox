@@ -252,7 +252,7 @@ export class Cards {
     return this.get(id);
   }
 
-  /** Keep it for later: to the back of the stack. */
+  /** Keep it for later. */
   later(id: number): Card {
     const r = this.row(id);
     if (r.state !== "open" && r.state !== "later") throw new FleetError(409, `card ${id} is ${r.state}`);

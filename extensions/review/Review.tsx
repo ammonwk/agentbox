@@ -1,12 +1,12 @@
 /**
  * Review: the cards sessions handed you (src/core/cards.ts), one at a time.
  *
- * A stack, decisions you owe first and newest first, then what happened, then
- * what you kept for later. The card on top takes three gestures, each with a
+ * A stack (cardorder.ts): the decisions you owe, those you kept for later last
+ * among them, then what happened. The card on top takes three gestures, each with a
  * button under it and a Shift+arrow shortcut (plain arrows navigate):
  *   right (Shift+→) — answer it: a sheet with a text box. Empty, on a card that
  *               only wanted seeing, means "seen".
- *   left  (Shift+←) — keep it for later: to the back of the stack and the Later list.
+ *   left  (Shift+←) — keep it for later: behind the others of its kind, and on the Later list.
  *   up    (Shift+↑) — the long version, from which the others work.
  *   down  (Shift+↓) — approve: the asker's recommendation is your answer. On a card
  *               that only wanted seeing, seen. A decision with no
@@ -288,7 +288,7 @@ function Actions({
   const does = downOf(card);
   return (
     <div className={`review-actions${long ? " review-actions-long" : ""}`}>
-      <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (Shift+←)" disabled={card.state === "later" && long}>
+      <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (Shift+←)">
         <Icon.chevronLeft size={18} />
         <span>Later</span>
       </button>
