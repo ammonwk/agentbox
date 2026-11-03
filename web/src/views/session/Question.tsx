@@ -15,6 +15,22 @@ interface Choice {
 
 const EMPTY: Choice = { labels: [], other: "", otherOn: false };
 
+/** Picks not yet sent, per question id, so leaving the session and coming
+ *  back finds them where they were, as the composer does with its draft. */
+const KEY = "agentbox.askPicks";
+type Saved = Record<string, { at: number; picks: Choice[] }>;
+function readSaved(): Saved {
+  try { return (JSON.parse(localStorage.getItem(KEY) ?? "{}") as Saved) ?? {}; } catch { return {}; }
+}
+function savePicks(id: string, picks: Choice[] | null): void {
+  const all = readSaved();
+  if (picks) all[id] = { at: Date.now(), picks };
+  else delete all[id];
+  // Questions are answered within the hour; a month is plenty to keep one.
+  for (const [k, v] of Object.entries(all)) if (Date.now() - v.at > 30 * 24 * 3600 * 1000) delete all[k];
+  try { localStorage.setItem(KEY, JSON.stringify(all)); } catch { /* best effort */ }
+}
+
 function answerOf(q: AskQuestion, p: Choice): AskAnswer | null {
   const other = p.other.replace(/\s+/g, " ").trim();
   const useOther = q.multiSelect ? !!other : p.otherOn && !!other;
@@ -31,18 +47,29 @@ function answerOf(q: AskQuestion, p: Choice): AskAnswer | null {
  * one dialog.
  */
 export function QuestionCard({ sessionId, ask }: { sessionId: string; ask: Pick<Ask, "id" | "questions"> }) {
-  const [picks, setPicks] = useState<Choice[]>(() => ask.questions.map(() => EMPTY));
+  const [picks, setPicks] = useState<Choice[]>(() => {
+    const saved = readSaved()[ask.id]?.picks;
+    return saved?.length === ask.questions.length ? saved : ask.questions.map(() => EMPTY);
+  });
   const { run, busy, error } = useAction();
   const [sent, setSent] = useState(false);
   const answers = ask.questions.map((q, i) => answerOf(q, picks[i]!));
   const ready = answers.every((a) => a !== null);
 
-  const set = (i: number, f: (p: Choice) => Choice) => setPicks((ps) => ps.map((p, j) => (j === i ? f(p) : p)));
+  const set = (i: number, f: (p: Choice) => Choice) =>
+    setPicks((ps) => {
+      const next = ps.map((p, j) => (j === i ? f(p) : p));
+      savePicks(ask.id, next);
+      return next;
+    });
 
   async function submit() {
     if (!ready || busy) return;
     const ok = await run(() => api.answer(sessionId, ask.id, answers as AskAnswer[]));
-    if (ok) setSent(true);
+    if (ok) {
+      setSent(true);
+      savePicks(ask.id, null);
+    }
   }
 
   return (
