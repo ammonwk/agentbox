@@ -12,7 +12,7 @@
  *        Warm and loud                      Always
  *     2. Blue ✔                         2. [ ] Olives
  *     3. Type something.                3. [ ] Type something
- *   ─────────────────                      Submit
+ *   ─────────────────                      Submit   (Next while tabs follow)
  *     4. Chat about this              ─────────────────
  *                                       4. Chat about this
  *   Enter to select · Tab/Arrow keys to navigate · Esc to cancel
@@ -26,7 +26,7 @@
  *     2. Cancel
  *
  * What the keys do: Enter on an option picks it and moves to the next tab
- * (single-select) or toggles its box (multi-select); on "Submit" it moves on.
+ * (single-select) or toggles its box (multi-select); on "Submit" or "Next" it moves on.
  * "Type something" is a text field while the pointer is on it, so typing
  * anything — a digit included — lands in it. The pointer is moved with ↑/↓,
  * never digits, and the screen is read again after every step: the terminal
@@ -109,8 +109,8 @@ export function readAskScreen(raw: string): QuestionScreen | ReviewScreen | null
     const m = /^(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)(?:\s+✔)?$/.exec(body);
     if (m) {
       items.push({ n: Number(m[1]), label: m[3]!.trim(), checked: m[2] === undefined ? null : m[2] === "✔", pointer, under: [] });
-    } else if (/^Submit$/.test(body.trim())) {
-      items.push({ n: null, label: "Submit", checked: null, pointer, under: [] });
+    } else if (/^(Submit|Next)$/.test(body.trim())) {
+      items.push({ n: null, label: body.trim(), checked: null, pointer, under: [] });
     } else if (items.length === 0 && t.trim()) {
       text.push(t.trim());
     } else if (t.trim()) {
@@ -221,8 +221,8 @@ export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswe
   } else if (otherItem?.checked) {
     return { keys: [...moves(items, otherItem), "Enter"] };
   }
-  const submit = items.find((i) => i.n === null && i.label === "Submit");
-  if (!submit) return { error: "cannot find Submit under the options" };
+  const submit = items.find((i) => i.n === null);
+  if (!submit) return { error: "cannot find Submit or Next under the options" };
   return { keys: [...moves(items, submit), "Enter"], commits: k };
 }
 
