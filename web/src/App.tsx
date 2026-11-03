@@ -22,6 +22,7 @@ import { Shortcuts } from "./views/Shortcuts";
 import { Context } from "./views/Context";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
+import { Dictation } from "./Dictation";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { ProjectTabs } from "./ProjectTabs";
@@ -204,6 +205,7 @@ export function App() {
     <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}>
     <SeenContext.Provider value={state && scoped ? { state, scoped, project: scope.project } : null}>
     <div className="app" data-page={route.page === "ext" ? route.id : route.page}>
+      <Dictation />
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -415,6 +417,7 @@ export function App() {
           <SystemBar
             accounts={state?.accounts ?? []}
             sessions={state?.sessions ?? []}
+            cleanup={state?.cleanup ?? null}
             focusAccount={focusAccount}
             slotRef={setSysbarSlot}
             tail={plugins.loaded.flatMap((l) => l.status.map((render, i) => <Fenced key={`${l.name}:${i}`} ext={l.name} what="A status item" small>{render()}</Fenced>))}

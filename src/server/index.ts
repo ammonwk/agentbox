@@ -27,6 +27,7 @@ import { behindHead, type Behind } from "../core/behind";
 import { restartService } from "../core/restart";
 import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError } from "../core/fleet";
+import { ResourceCleanup } from "../core/cleanup";
 import { repoRootOf } from "../core/git";
 import { sessionProject } from "../core/projects";
 import * as tmux from "../core/tmux";
@@ -177,6 +178,8 @@ export const fleet = new Fleet({
   poolAgents: () => poolAgents(),
 });
 setMetricsSource(() => fleet.sessions());
+export const cleanup = new ResourceCleanup(fleet, () => { scheduleCold(); scheduleHot(); });
+fleet.activityAllowed = id => cleanup.allows(id);
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
@@ -268,7 +271,7 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }));
+    .map((s) => ({ ...s, paused: !!s.pid && !cleanup.allows(s.id), attention: attentionOf(s, fleet.blockedReason(s.id)) }));
   return { sessions: sessions.sort(byAttention), serverTime: Date.now(), closedStamp };
 }
 
@@ -440,6 +443,7 @@ function coldState(): ColdState {
   const prClaims = prClaimsNow();
   return {
     accounts: views,
+    cleanup: cleanup.state(),
     logins: accounts.loginFlows(),
     repos: reposWithRoots(),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
@@ -738,6 +742,7 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
   }
   const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
   if (m.type === "input" && typeof m.data === "string") {
+    if (ws.data.kind === "term" && !fleet.activityAllowed(ws.data.sessionId)) return;
     t.write(m.data);
     if (ws.data.kind === "term" && !TERM_REPORT.test(m.data)) typedAt.set(ws.data.sessionId, Date.now());
   } else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
@@ -831,6 +836,12 @@ const router = new Router(mapError)
   })
 
   // ---- sessions
+  .add("GET", "/api/cleanup", () => json(cleanup.state()))
+  .add("POST", "/api/cleanup", async () => {
+    await fleet.ready;
+    return json(await cleanup.start());
+  })
+  .add("POST", "/api/cleanup/resume", async () => json(await cleanup.resume()))
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
     return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null, true, scopeOf(b)));

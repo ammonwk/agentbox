@@ -203,6 +203,7 @@ export class Scheduler {
 
   /** Start it now. A one-time one is then done; a recurring one keeps its times. */
   async runNow(id: string): Promise<string> {
+    if (!this.fleet.activityAllowed()) throw new FleetError(409, "Sessions are paused for machine cleanup. Resume them from the system bar first.");
     const s = this.get(id);
     if (s.noteCmd) {
       if (this.coming.has(id)) throw new FleetError(409, "it is at it right now: its note command is running");
@@ -224,7 +225,7 @@ export class Scheduler {
   }
 
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking || !this.fleet.activityAllowed()) return;
     this.ticking = true;
     try {
       const now = this.now();
@@ -374,6 +375,7 @@ export class Scheduler {
    * command is not started twice.
    */
   private async come(due: Schedule, now: number, early: boolean): Promise<Came> {
+    if (!this.fleet.activityAllowed()) return { quiet: "sessions are paused for machine cleanup" };
     if (this.coming.has(due.id)) return { quiet: "its note command is still running from last time" };
     this.coming.add(due.id);
     try {
@@ -411,6 +413,7 @@ export class Scheduler {
   /** The session it started, or null when it could not (said on the schedule).
    *  `note` goes before what it was asked. */
   private async fire(s: Schedule, now: number, early: boolean, note?: string): Promise<string | null> {
+    if (!this.fleet.activityAllowed()) return null;
     const once = !isRecurring(s.rule);
     const { accountId, fallbacks, ...spec } = s.spec;
     const asked = {

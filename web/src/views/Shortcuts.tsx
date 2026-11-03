@@ -14,6 +14,7 @@ function groups(): [string, [string, string][]][] {
       ["?", "These shortcuts"],
       ["↑ ↓ ← →", "Move through the sidebar, the list and the open pane"],
       ["F6", "Next pane, from a field or the terminal too"],
+      ["Hold Space", "In a text field or terminal: hold one second to dictate, release to insert; Esc cancels"],
     ]],
     ["Sessions", [
       ["j  k", "Next and previous session"],
