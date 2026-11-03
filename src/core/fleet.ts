@@ -458,7 +458,7 @@ export class Fleet extends EventEmitter {
   private btwDismissed = new Set<number>();
   private nextParkCheck: number;
   /** With its turn over: what a live session is still waiting on (`refreshWork`). */
-  private work = new Map<string, string>();
+  private work = new Map<string, Work>();
   private nextWorkCheck = 0;
   /** The snapshot recovery would start from: the previous run's until this
    *  run has checked it, then this run's own (`recordLive`). */
@@ -1016,7 +1016,7 @@ export class Fleet extends EventEmitter {
       }
 
       // In the words crash recovery uses, which look back on it.
-      const work = this.work.get(v.id)?.replace(/ were working\b/, " are working");
+      const work = this.work.get(v.id)?.why.replace(/ were working\b/, " are working");
       // A parent left waiting on its background agents shows "running"; it
       // waits for hours, and went cold every time before.
       if (!work || (v.status !== "waiting" && !v.background) || facts.turnOpen) continue;
@@ -1832,17 +1832,17 @@ export class Fleet extends EventEmitter {
       return table.byPid.get(pid!)?.startTicks === start;
     });
     const live = readLive().filter((e) => subagentWorking(e.text));
-    const work = new Map<string, string>();
+    const work = new Map<string, Work>();
     for (const v of idle) {
       // Let the server answer between sessions.
       await Bun.sleep(0);
-      let why: string | null = null;
+      let w: Work | null = null;
       try {
-        why = this.workOf(v, table, live, now);
+        w = this.workOf(v, table, live, now);
       } catch {
         /* its process went away mid-look */
       }
-      if (why) work.set(v.id, why);
+      if (w) work.set(v.id, w);
     }
     this.work = work;
   }
@@ -1855,9 +1855,9 @@ export class Fleet extends EventEmitter {
     return last !== null && now - last < SUBAGENT_QUIET_MS;
   }
 
-  private workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): string | null {
+  private workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): Work | null {
     const kids = [...this.views.values()].filter((c) => c.parent === v.id && c.host === "subagent" && c.status === "running");
-    if (kids.length) return `its subagents were working (${kids.map((k) => k.subagent?.name ?? k.id).join(", ")})`;
+    if (kids.length) return { why: `its subagents were working (${kids.map((k) => k.subagent?.name ?? k.id).join(", ")})`, guessed: false };
     const pane = v.tmux ? this.panes.get(v.tmux) : undefined;
     const pid = (pane ? this.processUnder(pane.pid, v.provider)?.pid : undefined) ?? v.pid;
     if (!pid) return null;
@@ -1865,16 +1865,27 @@ export class Fleet extends EventEmitter {
     const argv = argvOf(pid) ?? [];
     const flag = argv.indexOf("--session-id");
     const owners = [`pid:${pid}`, ...(flag !== -1 && argv[flag + 1] ? [argv[flag + 1]!] : []), ...(v.agentSessionId ? [v.agentSessionId] : [])];
-    if (live.some((e) => owners.includes(e.owner))) return "its subagents were working";
+    if (live.some((e) => owners.includes(e.owner))) return { why: "its subagents were working", guessed: false };
     const monitors = new Set<string>();
     const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
     if (t?.facts) {
       const wake = wakeHold(t.facts.wakes, now, startedAtOf(pid) ?? now);
-      if (wake) return wake;
+      if (wake) return { why: wake, guessed: false };
       for (const m of t.facts.monitors ?? []) monitors.add(m);
-      if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
-    return shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false, this.stillness, now).hold;
+    const shell = shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false, this.stillness, now).hold;
+    if (shell) return { why: shell, guessed: false };
+    // They run inside the process and leave no child to find: a write within
+    // `SUBAGENT_QUIET_MS` is all there is, and one that finished minutes ago
+    // still counts. Enough to keep a session up, not to say it waits on them.
+    return t?.facts && this.subagentsWorking(t.ref, now) ? { why: "its in-process subagents were working", guessed: true } : null;
+  }
+
+  /** The work a session's turn waits on, for the board (`Session.work`): one
+   *  seen running, not guessed from recent writes. */
+  private shownWork(id: string): string | null {
+    const w = this.work.get(id);
+    return w && !w.guessed ? w.why.replace(/ were working\b/, " are working") : null;
   }
 
   /**
@@ -1902,7 +1913,7 @@ export class Fleet extends EventEmitter {
         host: v.host,
         status,
         blockedOn: status === "blocked" ? (this.blocked.get(v.id) ?? null) : null,
-        work: status === "waiting" ? (this.work.get(v.id) ?? null) : null,
+        work: status === "waiting" ? (this.work.get(v.id)?.why ?? null) : null,
         parent: v.parent,
         subagent: v.subagent ? { name: v.subagent.name, answerWaiting: v.subagent.answerWaiting } : null,
         lastActivityAt: v.lastActivityAt,
@@ -2532,7 +2543,7 @@ export class Fleet extends EventEmitter {
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
-      work: live === "waiting" && host !== "none" ? (this.work.get(rec.id)?.replace(/ were working\b/, " are working") ?? null) : null,
+      work: live === "waiting" && host !== "none" ? this.shownWork(rec.id) : null,
       waits: this.waitsOf.get(rec.id) ?? [],
     };
   }
@@ -4368,6 +4379,12 @@ const PACED_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000];
 
 /** How often live sessions are checked for work a crash would kill. */
 const WORK_CHECK_MS = 30_000;
+/** What an idle session still waits on, and whether that is only inferred
+ *  from its subagents' recent writes (`Fleet.workOf`). */
+interface Work {
+  why: string;
+  guessed: boolean;
+}
 /** The live-sessions snapshot is rewritten at least this often. */
 const SNAPSHOT_HEARTBEAT_MS = 60_000;
 /** Between one recovered session's resume and the next. */
