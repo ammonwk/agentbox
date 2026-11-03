@@ -829,7 +829,9 @@ function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: Re
   }
   const on = waitingOn(s);
   if (on === "you") return { kind: "waiting", label: "Your turn", icon: <WaitGlyph on={on} size={13} /> };
-  return { kind: "armed", label: `Waiting on ${[...s.waits.map((w) => w.what), ...(s.work ? [s.work] : [])].join("; ")}`, icon: <WaitGlyph on={on} size={13} /> };
+  // `work` is a clause of its own: "a background command is running (…)".
+  const label = [...(s.waits.length ? [`Waiting on ${s.waits.map((w) => w.what).join("; ")}`] : []), ...(s.work ? [s.work[0]!.toUpperCase() + s.work.slice(1)] : [])].join("; ");
+  return { kind: "armed", label, icon: <WaitGlyph on={on} size={13} /> };
 }
 
 /**
