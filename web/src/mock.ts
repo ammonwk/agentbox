@@ -386,6 +386,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     bookmarkedAt: null,
     parkedAt: null,
     parkHold: null,
+    work: null,
     background: false,
     waits: [],
     ...p,

@@ -829,7 +829,7 @@ function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: Re
   }
   const on = waitingOn(s);
   if (on === "you") return { kind: "waiting", label: "Your turn", icon: <WaitGlyph on={on} size={13} /> };
-  return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}`, icon: <WaitGlyph on={on} size={13} /> };
+  return { kind: "armed", label: `Waiting on ${[...s.waits.map((w) => w.what), ...(s.work ? [s.work] : [])].join("; ")}`, icon: <WaitGlyph on={on} size={13} /> };
 }
 
 /**

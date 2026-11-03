@@ -1668,7 +1668,7 @@ export class Fleet extends EventEmitter {
           updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: null });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
-          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false });
+          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false, work: null });
           parked = true;
           const team = check.mates.length ? `, with teammates ${check.mates.join(", ")}` : "";
           console.log(`agentbox: parked ${v.id} (${v.title}) after ${minutes(now - v.lastActivityAt)} idle${team}`);
@@ -2532,6 +2532,7 @@ export class Fleet extends EventEmitter {
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
+      work: live === "waiting" && host !== "none" ? (this.work.get(rec.id)?.replace(/ were working\b/, " are working") ?? null) : null,
       waits: this.waitsOf.get(rec.id) ?? [],
     };
   }

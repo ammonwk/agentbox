@@ -661,6 +661,10 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** Its turn is over and work it left going will wake it: a background
+   *  command, a monitor, a wakeup, its subagents (fleet `refreshWork`), in a
+   *  line. Null while it runs, or when nothing is left going. */
+  work: string | null;
   /** The waits it has armed (`agentbox wait`) and not yet been told the end
    *  of: what each is on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
   waits: { kind: WaitSpec["kind"]; what: string }[];

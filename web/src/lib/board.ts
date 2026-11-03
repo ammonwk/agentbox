@@ -423,23 +423,26 @@ export function contextPct(s: Pick<Session, "contextUsed" | "contextLimit">): nu
 /**
  * What a session whose turn is over waits on: a wait it armed on GitHub (a
  * PR's checks or merge, an Actions run), another wait it armed (a timer, a
- * command, a session), or you, when it armed none or its turn ended `needs`.
- * The one rule for the list's icon, the nav badge and the turn's footer.
+ * command, a session) or work it left going that will wake it (`work`: a
+ * background command, a monitor, subagents), or you, when it has none of
+ * those or its turn ended `needs`. The one rule for the list's icon and the
+ * nav badge.
  */
 export type WaitingOn = "github" | "armed" | "you";
 
 const GITHUB_WAITS: ReadonlySet<string> = new Set(["pr", "run"]);
 
-export function waitingOn(s: Pick<Session, "waits" | "lastMessage">): WaitingOn {
-  if (!s.waits.length || turnStatus(s.lastMessage)?.kind === "needs") return "you";
-  return s.waits.some((w) => GITHUB_WAITS.has(w.kind)) ? "github" : "armed";
+export function waitingOn(s: Pick<Session, "waits" | "work" | "lastMessage">): WaitingOn {
+  if (turnStatus(s.lastMessage)?.kind === "needs") return "you";
+  if (s.waits.some((w) => GITHUB_WAITS.has(w.kind))) return "github";
+  return s.waits.length || s.work ? "armed" : "you";
 }
 
 /** The same for a `STATUS: waiting on …` line read on its own (an earlier
  *  turn's footer, whose waits are long gone), from what it names. */
 export function statusWaitingOn(text: string): WaitingOn {
   const on = text.replace(/^waiting\s+on\b/i, "");
-  if (!/\bwait|\bwatch/i.test(on)) return "you";
+  if (!/\bwait|\bwatch|\bbackground\b|\bmonitor/i.test(on)) return "you";
   return /\bwaits?\s+(?:pr|run)\b|\bPRs?\b|pull request|\bchecks?\b|\bCI\b|merg|\breview|\brun\s+\d/i.test(on) ? "github" : "armed";
 }
 
