@@ -24,9 +24,9 @@ export function FileLink({ path: ref, children }: { path: string; children?: Rea
   const desktop = (background: boolean) => {
     if (!busy) void run(() => api.openFile(self, path, background, dirs));
   };
-  const open = (modified: boolean) => {
+  const open = (modified: boolean, from: HTMLElement) => {
     if (here && (page || modified)) desktop(modified && page);
-    else openInViewer({ session: self, path, dirs });
+    else openInViewer({ session: self, path, dirs }, from);
   };
   const title = here
     ? page
@@ -39,16 +39,19 @@ export function FileLink({ path: ref, children }: { path: string; children?: Rea
       className={page ? "sx-desktoplink" : "sx-filelink"}
       title={`${ref} · ${title}`}
       aria-disabled={busy}
+      data-preview={here && page ? undefined : "file"}
+      data-target={JSON.stringify({ session: self, path, dirs })}
+      data-label={ref}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        open(e.ctrlKey || e.metaKey);
+        open(e.ctrlKey || e.metaKey, e.currentTarget);
       }}
       onAuxClick={(e) => {
         if (e.button !== 1) return;
         e.preventDefault();
         e.stopPropagation();
-        open(true);
+        open(true, e.currentTarget);
       }}
     >
       {!page && <Icon.file size={12} />}{children ?? ref}

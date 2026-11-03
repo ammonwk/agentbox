@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { api, uploadUrl } from "./api";
 import { Icon, Spinner } from "./components";
+import { stepOf, trailFrom } from "./lib/previews";
 
 export interface Attachment {
   n: number;
@@ -282,17 +283,20 @@ export function AttachButton({ a, className }: { a: Attachments; className?: str
 }
 
 function AttachmentStrip({ a }: { a: Attachments }) {
-  const [preview, setPreview] = useState<Attachment | null>(null);
+  const [preview, setPreview] = useState<HTMLElement | null>(null);
   if (a.atts.length === 0) return null;
   return (
-    <div className="att-strip" role="list" aria-label="Attached images">
+    <div className="att-strip" role="list" aria-label="Attached images" data-preview-scope="">
       {a.atts.map((x) => (
         <div key={x.n} role="listitem" className="att" data-state={x.state}>
           <button
             type="button"
             className="att-thumb"
             title={x.state === "error" ? `Upload failed: ${x.error} — click to retry` : x.state === "uploading" ? "Uploading…" : `Image #${x.n} — click to view`}
-            onClick={() => (x.state === "error" ? a.retry(x.n) : setPreview(x))}
+            data-preview={x.state === "error" ? undefined : "image"}
+            data-target={x.url}
+            data-label={`Image #${x.n}`}
+            onClick={(e) => (x.state === "error" ? a.retry(x.n) : setPreview(e.currentTarget))}
           >
             <img src={x.url} alt={`Image #${x.n}`} draggable={false} />
             {x.state === "uploading" ? (
@@ -313,32 +317,39 @@ function AttachmentStrip({ a }: { a: Attachments }) {
           </button>
         </div>
       ))}
-      {preview ? <Lightbox src={preview.url} label={`Image #${preview.n}`} onClose={() => setPreview(null)} /> : null}
+      {preview ? <Lightbox from={preview} onClose={() => setPreview(null)} /> : null}
     </div>
   );
 }
 
 /** Full size, over everything; Escape or a click anywhere closes it — and
- *  only it, not the dialog underneath. */
-export function Lightbox({ src, label, onClose }: { src: string; label: string; onClose: () => void }) {
+ *  only it, not the dialog underneath. ← and → step to the images beside the
+ *  one it was opened from (`lib/previews`). */
+export function Lightbox({ from, onClose }: { from: HTMLElement; onClose: () => void }) {
+  const [trail, setTrail] = useState(() => trailFrom(from));
+  const { target: src, label } = trail.items[trail.at]!;
   // An agent's path can name a file that is gone, or never was an image.
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      const step = e.key === "Escape" ? 0 : stepOf(e, trail);
+      if (e.key !== "Escape" && !step) return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      onClose();
+      if (step) setTrail({ ...trail, at: trail.at + step });
+      else onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, trail]);
+  const count = trail.items.length > 1 ? ` · ${trail.at + 1} of ${trail.items.length}` : "";
   return createPortal(
     // React events bubble through a portal to the dialog underneath, whose
     // backdrop would take this click as "close the dialog".
     <div
       className="att-lightbox"
       role="dialog"
+      aria-modal="true"
       aria-label={label}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => {
@@ -346,8 +357,8 @@ export function Lightbox({ src, label, onClose }: { src: string; label: string; 
         onClose();
       }}
     >
-      {failed ? <span className="att-lightbox-err">Could not open {label}: it is gone, or not an image.</span> : <img src={src} alt={label} onError={() => setFailed(true)} />}
-      <span className="att-lightbox-cap">{label} · Esc to close</span>
+      {failed === src ? <span className="att-lightbox-err">Could not open {label}: it is gone, or not an image.</span> : <img key={src} src={src} alt={label} onError={() => setFailed(src)} />}
+      <span className="att-lightbox-cap">{label}{count} · Esc to close</span>
     </div>,
     document.body,
   );

@@ -238,7 +238,7 @@ function ShownImage({ src: raw, alt = "" }: ImgProps) {
   const base = useContext(FileBase);
   const places = useContext(AgentDir);
   const [broken, setBroken] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<HTMLElement | null>(null);
   const src = typeof raw === "string" ? raw : "";
   const web = /^https?:\/\//i.test(src);
   const path = web ? src : safeDecode(src);
@@ -248,11 +248,11 @@ function ShownImage({ src: raw, alt = "" }: ImgProps) {
   if (!url || broken) return <ImageChip label={label} title={broken ? `Could not load ${path}` : path} />;
   return (
     <span className="sx-img">
-      <button type="button" className="sx-img-btn" title={`${path} · click for full size`} onClick={() => setOpen(true)}>
+      <button type="button" className="sx-img-btn" title={`${path} · click for full size`} data-preview="image" data-target={url} data-label={label} onClick={(e) => setOpen(e.currentTarget)}>
         <img src={url} alt={alt} loading="lazy" onError={() => setBroken(true)} />
       </button>
       {alt ? <span className="sx-img-cap">{alt}</span> : null}
-      {open ? <Lightbox src={url} label={label} onClose={() => setOpen(false)} /> : null}
+      {open ? <Lightbox from={open} onClose={() => setOpen(null)} /> : null}
     </span>
   );
 }

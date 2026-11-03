@@ -32,7 +32,7 @@ export function ImagePath({ path: ref, children }: { path: string; children?: Re
   const { self } = useContext(SessionLinks);
   const path = inBase(useContext(FileBase), ref);
   const places = useContext(AgentDir);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<HTMLElement | null>(null);
   if (!self) return <>{children ?? ref}</>;
   const url = shownImageUrl(self, path, placesFor(places, path));
   return (
@@ -41,15 +41,18 @@ export function ImagePath({ path: ref, children }: { path: string; children?: Re
         href={url}
         className="sx-imgpath"
         title={`${path} · click to view`}
+        data-preview="image"
+        data-target={url}
+        data-label={path.split("/").pop() || path}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setOpen(true);
+          setOpen(e.currentTarget);
         }}
       >
         {children ?? ref}
       </a>
-      {open ? <Lightbox src={url} label={path.split("/").pop() || path} onClose={() => setOpen(false)} /> : null}
+      {open ? <Lightbox from={open} onClose={() => setOpen(null)} /> : null}
     </>
   );
 }

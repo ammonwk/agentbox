@@ -8,7 +8,8 @@ import { Markdown } from "./Markdown";
 import { SessionLinks } from "./sessionlinks";
 import { useAction } from "./useAction";
 import "./fileviewer.css";
-import { closeViewer, FileBase, openInViewer, useOnThisMachine, useViewerStack, viewerBack, type ViewerEntry } from "./viewerstore";
+import { closeViewer, FileBase, openInViewer, stepViewer, trailAt, useOnThisMachine, useViewerStack, viewerBack, type ViewerEntry } from "./viewerstore";
+import { stepOf } from "../../lib/previews";
 
 const PdfView = lazy(() => import("./PdfView"));
 
@@ -76,15 +77,21 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
     };
   }, [entry.session, entry.path, entry.dirs]);
 
-  // Escape closes the viewer and nothing under it; the page under it stays put.
+  // Escape closes the viewer and nothing under it; the page under it stays
+  // put. ← and → step to the files beside the link it was opened from. An
+  // image shown full size over it takes the keys first.
   useEffect(() => {
     const restore = document.activeElement as HTMLElement | null;
     box.current?.focus({ preventScroll: true });
+    const trail = trailAt(depth);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (document.querySelector(".att-lightbox")) return;
+      const step = e.key === "Escape" ? 0 : stepOf(e, trail);
+      if (e.key !== "Escape" && !step) return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      closeViewer();
+      if (step) stepViewer(step);
+      else closeViewer();
     };
     window.addEventListener("keydown", onKey, true);
     const overflow = document.body.style.overflow;
@@ -102,7 +109,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
   const FileIcon = iconOf(file);
   const textual = file?.kind === "text" || (file?.kind === "markdown" && source);
   const lineCount = file?.text ? file.text.split("\n").length - (file.text.endsWith("\n") ? 1 : 0) : 0;
-  const open = (path: string) => openInViewer({ session: entry.session, path });
+  const open = (path: string, from?: HTMLElement) => openInViewer({ session: entry.session, path }, from);
 
   const copy = () => {
     if (!file) return;
@@ -125,7 +132,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
 
   return (
     <div className="fv-backdrop" onMouseDown={(e) => e.target === e.currentTarget && closeViewer()}>
-      <div className="fv" role="dialog" aria-modal="true" aria-label={name} tabIndex={-1} ref={box} data-kind={file?.kind ?? "loading"}>
+      <div className="fv" role="dialog" aria-modal="true" aria-label={name} tabIndex={-1} ref={box} data-kind={file?.kind ?? "loading"} data-preview-scope="">
         <header className="fv-head">
           {depth > 1 ? (
             <button type="button" className="fv-btn" onClick={viewerBack} aria-label="Back" title="Back">
@@ -217,7 +224,7 @@ function Body({ file, session, source, wrap, lines, open, here }: {
   source: boolean;
   wrap: boolean;
   lines: [number, number] | null;
-  open: (path: string) => void;
+  open: (path: string, from?: HTMLElement) => void;
   here: boolean;
 }) {
   const raw = rawFileUrl(file.path);
@@ -271,15 +278,24 @@ function Body({ file, session, source, wrap, lines, open, here }: {
                 </button>
               </li>
             ) : null}
-            {file.entries?.map((e) => (
+            {file.entries?.map((e) => {
+              const path = `${file.path === "/" ? "" : file.path}/${e.name}`;
+              return (
               <li key={e.name}>
-                <button type="button" onClick={() => open(`${file.path === "/" ? "" : file.path}/${e.name}`)}>
+                <button
+                  type="button"
+                  data-preview={e.dir ? undefined : "file"}
+                  data-target={JSON.stringify({ session, path })}
+                  data-label={e.name}
+                  onClick={(ev) => open(path, ev.currentTarget)}
+                >
                   {e.dir ? <Icon.folder size={16} weight="duotone" /> : <Icon.file size={16} />}
                   <span className="fv-list-name">{e.name}</span>
                   {e.dir ? null : <span className="fv-list-size">{fmtBytes(e.size)}</span>}
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
           {file.entries?.length === 0 ? <p className="fv-empty-detail fv-pad">This folder is empty.</p> : null}
           {file.truncated ? <div className="fv-cut">Showing the first {file.entries?.length} entries.</div> : null}
