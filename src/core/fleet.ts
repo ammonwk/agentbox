@@ -452,6 +452,8 @@ export class Fleet extends EventEmitter {
   private touched = new Map<string, number>();
   /** When each session was last given something to answer (`Session.saidAt`). */
   private saidAt = new Map<string, number>();
+  /** The last message typed into each session's pane, for `interrupt` to take back. */
+  private typed = new Map<string, string>();
   /** Side questions asked in the terminal whose answer is being waited for, by session. */
   private btwWatching = new Map<string, Promise<void>>();
   private btwHistory = new BtwHistory();
@@ -3668,6 +3670,7 @@ export class Fleet extends EventEmitter {
     try {
       await this.deps.runtime.sendText(pane, body + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
       this.saidAt.set(id, at);
+      this.typed.set(id, body);
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
       // The text is a draft in the input box: it goes out with the next
@@ -3775,8 +3778,41 @@ export class Fleet extends EventEmitter {
     this.deps.runtime.sendKeys(s.tmux, keys);
   }
 
-  interrupt(id: string): void {
+  /**
+   * Stop the turn with Esc. Claude puts a message it had not answered yet
+   * (one just sent, or one queued behind the turn) back in its input box; with
+   * `takeBack`, the message is cleared from there and returned, to be edited
+   * where it was written. Null when the box did not get it back.
+   */
+  async interrupt(id: string, takeBack = false): Promise<string | null> {
     this.keys(id, ["Escape"]);
+    const s = this.get(id);
+    const said = this.typed.get(id);
+    const rw = this.adapter(s.provider).rewind;
+    if (!takeBack || !said || !rw || !s.tmux) return null;
+    const pane = s.tmux;
+    const rt = this.deps.runtime;
+    const flat = (t: string) => t.replace(/\s+/g, "");
+    const holds = (screen: string) => {
+      const head = flat(rw.inputHead(screen) ?? "");
+      return head.length >= Math.min(6, flat(said).length) && flat(said).startsWith(head.slice(0, 24));
+    };
+    // It comes back as soon as Claude has stopped, well inside this.
+    let screen = rt.capture(pane) ?? "";
+    for (let t = 0; !holds(screen); t += 100) {
+      if (t >= 1_500) return null;
+      await Bun.sleep(100);
+      screen = rt.capture(pane) ?? "";
+    }
+    // Ctrl-C empties a box with text in it, in one key.
+    rt.sendKeys(pane, ["C-c"]);
+    for (let t = 0; !rw.inputEmpty(screen); t += 100) {
+      if (t >= 1_500) throw new FleetError(409, "stopped, but the message would not clear from its input box; the Terminal tab shows it");
+      await Bun.sleep(100);
+      screen = rt.capture(pane) ?? "";
+    }
+    this.typed.delete(id);
+    return said;
   }
 
   /**

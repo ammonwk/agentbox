@@ -9,8 +9,9 @@ import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
 import { useRecall } from "./recall";
-import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
+import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type Draft, type PendingSend } from "./drafts";
 import { PendingSends, deliverPending } from "./submissions";
+import { dropEcho } from "./echo";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
@@ -78,23 +79,51 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const recall = useRecall(session.id, text, setText);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = live && session.provider === "claude" ? BTW.exec(text) : null;
-  /** Esc on the keyboard stops the turn: a session at its prompt has nothing to stop. */
-  const interruptible = live && session.status === "running";
+  /** The last message sent from here, to put back as written (its images
+   *  as images) if the session gives it back. */
+  const lastSent = useRef<{ id: string; body: string; draft: Draft; at: number } | null>(null);
+  /** Esc on the keyboard stops the turn: a session at its prompt has nothing
+   *  to stop, unless the board has yet to see the one just sent start. */
+  const interruptible = () => live && (session.status === "running" || Date.now() - (lastSent.current?.at ?? 0) < 5_000);
+
+  /** A draft put back after what the box holds, its images numbered past the box's own. */
+  function merged(d: Pick<Draft, "text" | "images">) {
+    let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
+    const numbers = new Map(d.images.map((a) => [a.n, ++n]));
+    const back = d.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
+    return {
+      text: [text.trimEnd(), back].filter(Boolean).join("\n\n"),
+      images: d.images.map((a) => ({ ...a, n: numbers.get(a.n)! })),
+    };
+  }
+
+  /** Stop the turn. A message it had not answered yet comes back to the box
+   *  to be edited, as Claude Code does with Esc right after sending. */
+  const stop = () => run(async () => {
+    const { takenBack } = await api.interrupt(session.id, true);
+    if (!takenBack) return;
+    const sent = lastSent.current;
+    lastSent.current = null;
+    if (sent) dropEcho(sent.id);
+    const back = merged(sent?.body === takenBack ? sent.draft : { text: takenBack, images: [] });
+    images.restore(back.images);
+    setText(back.text);
+    ref.current?.focus();
+  });
   // Esc from anywhere on the page that is not a field, the terminal (which
   // sends its own) or a dialog.
   useEffect(() => {
-    if (!interruptible) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.repeat || e.defaultPrevented) return;
+      if (e.key !== "Escape" || e.repeat || e.defaultPrevented || !interruptible()) return;
       if (document.querySelector("[role=dialog]")) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable)) return;
       e.preventDefault();
-      void run(() => api.interrupt(session.id));
+      void stop();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interruptible, session.id, run]);
+  });
 
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
@@ -163,6 +192,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       // Taking the draft notifies any composer holding this revision. A
       // composer left meanwhile needs no cleanup: storage already took it.
       await deliverPending(pending);
+      if (pending.kind === "send") lastSent.current = { id: pending.id, body, draft: sent, at: Date.now() };
     }); } finally { submitting.current = false; }
   }
 
@@ -202,15 +232,11 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       <PendingSends sessionId={session.id} onRestore={async (p) => {
         const previousRevision = revision.current;
         const restoredRevision = newRevision();
-        let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
-        const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
-        const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
-        const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
-        const restored = [text.trimEnd(), recovered].filter(Boolean).join("\n\n");
-        await restorePending(session.id, p.id, { text: restored, images: [...images.saved(), ...restoredImages], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
-        images.restore(restoredImages);
+        const back = merged(p.draft);
+        await restorePending(session.id, p.id, { text: back.text, images: [...images.saved(), ...back.images], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+        images.restore(back.images);
         revision.current = restoredRevision;
-        setTextState(restored);
+        setTextState(back.text);
       }} />
       {error ? (
         <div className="cmp-error" role="alert">
@@ -293,7 +319,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
-          title="Enter sends · Shift+Enter for a new line · ↑ for what you said before · / for skills · Esc stops a running turn"
+          title="Enter sends · Shift+Enter for a new line · ↑ for what you said before · / for skills · Esc stops a running turn, and puts back a message it had not answered yet"
           {...skill.props}
           onChange={(e) => {
             setText(e.target.value);
@@ -306,9 +332,9 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               void submit();
             } else if (e.key === "Escape") {
               // Mid-turn Esc stops the turn, as it does in the terminal; at rest it leaves the box.
-              if (interruptible) {
+              if (interruptible()) {
                 e.preventDefault();
-                if (!e.repeat && !busy) void run(() => api.interrupt(session.id));
+                if (!e.repeat && !busy) void stop();
               } else (e.target as HTMLTextAreaElement).blur();
             }
           }}
@@ -336,7 +362,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               title="Interrupt the current turn (Esc)"
               aria-label="Interrupt the current turn"
               disabled={busy}
-              onClick={() => void run(() => api.interrupt(session.id))}
+              onClick={() => void stop()}
             >
               <Icon.stop size={14} />
             </button>

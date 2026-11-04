@@ -172,11 +172,21 @@ export function claudeRewindStep(raw: string, goal: RewindGoal, st: RewindState)
 /** Claude's input box holds nothing: a `❯` line under a rule, with no text after it, and the rule under it. */
 export function claudeInputEmpty(raw: string): boolean {
   const lines = plainScreen(raw).split("\n");
-  for (let i = lines.length - 1; i > 0; i--) {
-    if (!/^❯/.test(lines[i]!) || !/^─{20,}\s*$/.test(lines[i - 1]!)) continue;
-    return lines[i]!.slice(1).trim() === "" && /^─{20,}\s*$/.test(lines[i + 1] ?? "");
-  }
-  return false;
+  const i = boxRow(lines);
+  return i > 0 && lines[i]!.slice(1).trim() === "" && /^─{20,}\s*$/.test(lines[i + 1] ?? "");
+}
+
+/** The first row of what Claude's input box holds ("" when nothing); null when no box shows. */
+export function claudeInputHead(raw: string): string | null {
+  const lines = plainScreen(raw).split("\n");
+  const i = boxRow(lines);
+  return i > 0 ? lines[i]!.slice(1).trim() : null;
+}
+
+/** The input box's first row: a `❯` line under a rule; -1 when none shows. */
+function boxRow(lines: string[]): number {
+  for (let i = lines.length - 1; i > 0; i--) if (/^❯/.test(lines[i]!) && /^─{20,}\s*$/.test(lines[i - 1]!)) return i;
+  return -1;
 }
 
 /** Is the rewind list or its confirmation showing? */

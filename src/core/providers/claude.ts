@@ -35,7 +35,7 @@ import * as darwin from "../darwin";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
-import { claudeInputEmpty, claudeRewindOpen, claudeRewindStep, rewindStart } from "./claude-rewind";
+import { claudeInputEmpty, claudeInputHead, claudeRewindOpen, claudeRewindStep, rewindStart } from "./claude-rewind";
 import { carryFlags, promptFiles, setsFlag, type Arity, type CarryWhere, type PromptFlag } from "../launch";
 import type {
   Command,
@@ -837,6 +837,7 @@ export const claudeAdapter: ProviderAdapter = {
     start: rewindStart,
     step: claudeRewindStep,
     inputEmpty: claudeInputEmpty,
+    inputHead: claudeInputHead,
     isOpen: claudeRewindOpen,
     undoesCode: true,
     holds,

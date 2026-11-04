@@ -279,7 +279,8 @@ export const api = {
   /** Carry on from another version of a message (`TimelineEvent.versions`). */
   continueFrom: (id: string, via: string) => post<null>(`/api/sessions/${enc(id)}/continue-from`, { via }),
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
-  interrupt: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/interrupt`),
+  /** Esc in the session; with `takeBack`, an unanswered message Claude put back in its input box is cleared there and returned. */
+  interrupt: (id: string, takeBack = false) => post<{ takenBack: string | null }>(`/api/sessions/${enc(id)}/interrupt`, { takeBack }),
   /** Ask Claude a side question (/btw); the answer arrives over the watch as a `btw` frame. */
   btw: (id: string, question: string) => post<Btw>(`/api/sessions/${enc(id)}/btw`, { question }),
   /** Take a side question back: its card leaves the Timeline and the panel in the pane closes. */

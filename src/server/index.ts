@@ -1113,9 +1113,9 @@ const router = new Router(mapError)
     fleet.dismissBtw(params.id!, row);
     return json(null);
   })
-  .add("POST", "/api/sessions/:id/interrupt", ({ params }) => {
-    fleet.interrupt(params.id!);
-    return json(null);
+  .add("POST", "/api/sessions/:id/interrupt", async ({ req, params }) => {
+    const b = await readBody(req);
+    return json({ takenBack: await fleet.interrupt(params.id!, b.takeBack === true) });
   })
   .add("POST", "/api/sessions/:id/model", async ({ req, params }) => {
     const b = await readBody(req);

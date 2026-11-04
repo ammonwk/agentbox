@@ -536,6 +536,9 @@ export interface ProviderAdapter {
     start(): RewindState;
     step(screen: string, goal: RewindGoal, st: RewindState): RewindStep;
     inputEmpty(screen: string): boolean;
+    /** The first row of what the input box holds ("" when nothing), null when
+     *  none shows: Esc before any reply puts the message back there. */
+    inputHead(screen: string): string | null;
     isOpen(screen: string): boolean;
     /** It can put the files back as they were, too. */
     undoesCode: boolean;
