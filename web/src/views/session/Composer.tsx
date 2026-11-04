@@ -97,24 +97,35 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     };
   }
 
+  /** Esc while a message is still being typed into the pane: stop once it is in. */
+  const stopOnSent = useRef(false);
   /** Stop the turn. A message it had not answered yet comes back to the box
    *  to be edited, as Claude Code does with Esc right after sending. */
-  const stop = () => run(async () => {
-    const { takenBack } = await api.interrupt(session.id, true);
-    if (!takenBack) return;
-    const sent = lastSent.current;
-    lastSent.current = null;
-    if (sent) dropEcho(sent.id);
-    const back = merged(sent?.body === takenBack ? sent.draft : { text: takenBack, images: [] });
-    images.restore(back.images);
-    setText(back.text);
-    ref.current?.focus();
-  });
+  const stop = () => {
+    if (submitting.current) {
+      stopOnSent.current = true;
+      return;
+    }
+    return run(async () => {
+      const { takenBack } = await api.interrupt(session.id, true);
+      if (!takenBack) return;
+      const sent = lastSent.current;
+      lastSent.current = null;
+      if (sent) dropEcho(sent.id);
+      const back = merged(sent?.body === takenBack ? sent.draft : { text: takenBack, images: [] });
+      images.restore(back.images);
+      setText(back.text);
+      ref.current?.focus();
+    });
+  };
+  /** This render's `stop`, for a send that ends after the render that began it. */
+  const latestStop = useRef(stop);
+  latestStop.current = stop;
   // Esc from anywhere on the page that is not a field, the terminal (which
   // sends its own) or a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.repeat || e.defaultPrevented || !interruptible()) return;
+      if (e.key !== "Escape" || e.repeat || e.defaultPrevented || !(interruptible() || submitting.current)) return;
       if (document.querySelector("[role=dialog]")) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable)) return;
@@ -194,6 +205,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       await deliverPending(pending);
       if (pending.kind === "send") lastSent.current = { id: pending.id, body, draft: sent, at: Date.now() };
     }); } finally { submitting.current = false; }
+    if (stopOnSent.current) {
+      stopOnSent.current = false;
+      if (lastSent.current) void latestStop.current();
+    }
   }
 
   /** Put a voice message into words, after what is already in the box, to be read over before Send. */
@@ -332,9 +347,9 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               void submit();
             } else if (e.key === "Escape") {
               // Mid-turn Esc stops the turn, as it does in the terminal; at rest it leaves the box.
-              if (interruptible()) {
+              if (interruptible() || submitting.current) {
                 e.preventDefault();
-                if (!e.repeat && !busy) void stop();
+                if (!e.repeat) void stop();
               } else (e.target as HTMLTextAreaElement).blur();
             }
           }}
