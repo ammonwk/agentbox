@@ -214,6 +214,8 @@ describe("opencode launching", () => {
     const b = newSessionId(T0 + 1000);
     expect(a).toMatch(/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
     expect(b < a).toBe(true);
+    // Zen's free models refuse an id whose counter is 0; opencode's start at 1.
+    expect(a.slice(13, 16)).toBe("ffe");
   });
 
   test("spawn makes the session with its model and variant, then opens it standalone", () => {

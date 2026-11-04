@@ -90,7 +90,7 @@ export interface PlaceRequest {
   claim?: number | null;
   /** A specific account instead of the balancer's pick. */
   accountId?: string | null;
-  /** The model is someone else's to meter (one agentbox's devin bridge
+  /** The model is someone else's to meter (a free one, or one agentbox's devin bridge
    *  serves): the session claims nothing, and an account at its limit can
    *  still take it. Turned off and logged out still rule an account out. */
   unmetered?: boolean;

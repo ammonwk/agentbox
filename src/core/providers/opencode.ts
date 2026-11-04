@@ -71,14 +71,16 @@ let idCounter = 0;
 /**
  * A session id as opencode makes them (`Identifier.descending`): `ses_`, the
  * creation time times 4096 plus a counter, bit-inverted to 48 bits so newer
- * sorts first, in hex, then 14 random base62 characters.
+ * sorts first, in hex, then 14 random base62 characters. The counter starts
+ * at 1, as opencode's does: OpenCode Zen refuses its free models to a session
+ * whose id has 0 there ("Free usage limit reached", measured 2026-11-04).
  */
 export function newSessionId(now = Date.now()): string {
-  if (now === lastIdMs) idCounter++;
-  else {
+  if (now !== lastIdMs) {
     lastIdMs = now;
     idCounter = 0;
   }
+  idCounter++;
   const v = BigInt(now) * 4096n + BigInt(idCounter);
   const hex = (~v & 0xffffffffffffn).toString(16).padStart(12, "0");
   let rand = "";

@@ -28,6 +28,7 @@ import { claimFor, listedClaim } from "./claim";
 import { claimsByAccount, type ClaimInput } from "./claims";
 import { Forecaster } from "./forecast";
 import { Rates } from "./rates";
+import { isFree } from "./pricing";
 import {
   attachDiscoveredSpawn,
   dismissBtw,
@@ -2908,7 +2909,8 @@ export class Fleet extends EventEmitter {
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
           auth: this.deps.usage.authOf?.(a.id),
-          stopped: stoppedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined, model),
+          // A free model's limit is the model's, not the account's plan.
+          stopped: stoppedSince(hits.filter((h) => h.accountId === a.id && !isFree(h.detail.split(": ")[0])), this.now(), usage ?? undefined, model),
           refused: refused.get(a.id) ?? null,
         };
       });
@@ -2978,9 +2980,9 @@ export class Fleet extends EventEmitter {
       model: asked,
       effort: effort ?? null,
       claim: this.claimOf(provider, asked, effort ?? null, first),
-      // A model the devin bridge serves draws on its own provider, not on
-      // the devin account the session is signed in as.
-      unmetered: provider === "devin" && bridgedModel(asked) !== null,
+      // A free model, or one the devin bridge serves, draws on nothing of
+      // the account's: its plan being walled does not stand in the way.
+      unmetered: isFree(asked) || (provider === "devin" && bridgedModel(asked) !== null),
       accountId: home ? home.account.id : accountId && accountId !== "auto" ? accountId : null,
       // One started without a model runs on the CLI's own default: that is
       // the route whose refusals count against it.
