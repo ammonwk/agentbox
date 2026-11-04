@@ -190,7 +190,9 @@ export default function (p: Plugin) {
 
 `agentbox/client` (web/src/plugin/client.ts) is what it may import from the
 app: the app's parts (`Button`, `Empty`, `Icon`, `Modal`, `RelativeTime`,
-`Markdown`, `MarkdownLinks`, `ErrorBoundary`), its live state
+`Markdown`, `MarkdownLinks`, `ErrorBoundary`; `useDraft`, `AttachFrame` and
+`AttachButton` for a text box that takes images and keeps its draft, as the
+composer does), its live state
 (`useAgentbox()`: all of it, the selected project's part, and that project),
 `call(method, path, body)` for the HTTP API, `href` and `go` for the app's
 addresses, and the domain types. It is the promise: what is there keeps

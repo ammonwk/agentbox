@@ -33,6 +33,8 @@ export type { AppState, Card, Session, Repo, Account, ExtensionInfo } from "../.
 export type { IconComponent } from "../components";
 export { Button, Empty, ErrorBoundary, Icon, Modal, RelativeTime } from "../components";
 export { Markdown } from "../views/session/Markdown";
+/** A text box that takes pasted, dropped or picked images and keeps its draft: `useDraft` is its state, `AttachFrame` its border and thumbnails, `AttachButton` the paperclip. */
+export { AttachButton, AttachFrame, useDraft } from "../attachments";
 export { describeAt } from "../../../src/core/schedule";
 export { hrefOf as href, go, type Route } from "../route";
 

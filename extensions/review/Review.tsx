@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { type AppState, type Card, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime } from "agentbox/client";
+import { type AppState, type Card, AttachButton, AttachFrame, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
 import { laterOf, stackOf } from "./cardorder";
 import "./review.css";
 
@@ -92,8 +92,8 @@ export function Review({ state }: { state: AppState }) {
     return () => clearTimeout(t);
   }, [last]);
 
-  /** Do it: the card leaves in the gesture's direction, then is gone from the stack. */
-  const act = useCallback((card: Card, what: "answered" | "approved" | "seen" | "later", text = "") => {
+  /** Do it: the card leaves in the gesture's direction, then is gone from the stack. True once the server has it. */
+  const act = useCallback((card: Card, what: "answered" | "approved" | "seen" | "later", text = ""): Promise<boolean> => {
     setError(null);
     setNothing(null);
     setReading(null);
@@ -109,15 +109,19 @@ export function Review({ state }: { state: AppState }) {
       onStack ? 190 : 0,
     );
     setLast({ card, what, at: Date.now() });
-    (what === "later" ? api.laterCard(card.id) : api.answerCard(card.id, text)).catch((e: Error) => {
-      setError(e.message);
-      setLast(null);
-      setLocal((prev) => {
-        const next = new Map(prev);
-        next.delete(card.id);
-        return next;
-      });
-    });
+    return (what === "later" ? api.laterCard(card.id) : api.answerCard(card.id, text)).then(
+      () => true,
+      (e: Error) => {
+        setError(e.message);
+        setLast(null);
+        setLocal((prev) => {
+          const next = new Map(prev);
+          next.delete(card.id);
+          return next;
+        });
+        return false;
+      },
+    );
   }, []);
 
   const undo = useCallback(() => {
@@ -264,7 +268,7 @@ export function Review({ state }: { state: AppState }) {
           onAnswer={setAnswering}
         />
       ) : null}
-      {answering ? <AnswerSheet card={answering} onClose={() => setAnswering(null)} onSend={(text) => act(answering, text.trim() ? "answered" : "seen", text.trim())} /> : null}
+      {answering ? <AnswerSheet card={answering} onClose={() => setAnswering(null)} onSend={(text) => act(answering, text ? "answered" : "seen", text)} /> : null}
     </div>
   );
 }
@@ -614,19 +618,30 @@ function LongView({
   );
 }
 
-/** The sheet a right swipe opens: a text box over the keyboard. */
-function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => void; onSend: (text: string) => void }) {
-  const [text, setText] = useState("");
+/** The sheet a right swipe opens: a text box over the keyboard, which takes
+ *  images and keeps what is typed until it is sent, as the composer does. */
+function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => void; onSend: (text: string) => Promise<boolean> }) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  const { text, setText, images, body, discard } = useDraft(`card:${card.id}`, box);
+  const [error, setError] = useState<string | null>(null);
   const decision = card.kind === "decision";
   const empty = !text.trim();
+  // A restored draft is picked up where it ended.
+  useEffect(() => {
+    const el = box.current;
+    if (el) el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
   return (
     <Modal title={decision ? "Your answer" : "Respond"} hint={card.title} onClose={onClose}>
       <form
         className="review-answer"
         onSubmit={(e) => {
           e.preventDefault();
-          if (decision && empty) return;
-          onSend(text);
+          if ((decision && empty) || images.uploading) return;
+          body().then(
+            (t) => onSend(t).then((ok) => ok && discard()),
+            (e: Error) => setError(e.message),
+          );
         }}
       >
         {card.recommend ? (
@@ -641,20 +656,27 @@ function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => voi
             </span>
           </button>
         ))}
-        <textarea
-          className="input review-answer-box"
-          autoFocus
-          rows={4}
-          value={text}
-          placeholder={decision ? "What should it do?" : "Nothing to add? Send it empty: that means seen, fine."}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
-          }}
-        />
+        <AttachFrame a={images} className="review-answer-frame">
+          <textarea
+            ref={box}
+            className="input review-answer-box"
+            autoFocus
+            rows={4}
+            value={text}
+            placeholder={decision ? "What should it do? Paste or drop images too." : "Nothing to add? Send it empty: that means seen, fine."}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (images.onKeyDown(e)) return;
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
+            }}
+          />
+        </AttachFrame>
         <div className="review-answer-foot">
-          <span className="faint review-answer-note">{empty && !decision ? "Marks it seen; nothing is sent to the session." : "Typed into the session that asked, as you."}</span>
-          <Button type="submit" variant="primary" icon={empty && !decision ? Icon.check : Icon.send} disabled={decision && empty}>
+          <AttachButton a={images} />
+          <span className="faint review-answer-note">
+            {error ? <span className="error">{error}</span> : empty && !decision ? "Marks it seen; nothing is sent to the session." : "Typed into the session that asked, as you."}
+          </span>
+          <Button type="submit" variant="primary" icon={empty && !decision ? Icon.check : Icon.send} disabled={(decision && empty) || images.uploading}>
             {empty && !decision ? "Seen" : "Send"}
           </Button>
         </div>

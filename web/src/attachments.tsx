@@ -8,11 +8,12 @@
  * read from disk.
  */
 
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { api, uploadUrl } from "./api";
 import { Icon, Spinner } from "./components";
 import { stepOf, trailFrom } from "./lib/previews";
+import { loadDraft, newRevision, saveDraft } from "./views/session/drafts";
 
 export interface Attachment {
   n: number;
@@ -236,6 +237,30 @@ export function useAttachments({
 }
 
 export type Attachments = ReturnType<typeof useAttachments>;
+
+/**
+ * A text box with images that keeps what is typed in it as the composer keeps
+ * its draft (views/session/drafts.ts), under `key`: closing the box or
+ * reloading the page finds the text and its images where they were. `body()`
+ * is the text to send, the images as paths; `discard()`, once it is sent,
+ * forgets the draft, and is safe after the box is gone.
+ */
+export function useDraft(key: string, textareaRef: RefObject<HTMLTextAreaElement | null>) {
+  const draft = useMemo(() => loadDraft(key), [key]);
+  const [text, setText] = useState(draft?.text ?? "");
+  const revision = useRef(draft?.revision ?? newRevision()).current;
+  const images = useAttachments({ text, setText, textareaRef, initial: draft?.images });
+  const saved = images.saved();
+  const savedKey = JSON.stringify(saved);
+  useEffect(() => void saveDraft(key, text, saved, revision, revision), [key, text, savedKey]);
+  return {
+    text,
+    setText,
+    images,
+    body: async () => (await images.resolve(text)).trim(),
+    discard: () => void saveDraft(key, "", [], revision, revision),
+  };
+}
 
 /**
  * The frame a prompt box and its images share: the border, the focus ring
