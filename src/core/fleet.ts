@@ -4643,12 +4643,12 @@ function sessionEnv(id: string, provider: ProviderId, parent?: ParentModel | nul
 }
 
 /** The variables a launch marks secret (`Command.secret`) apart from the
- *  rest, so they go through tmux's private launcher, never its command line. */
-function splitSecret(all: Record<string, string>, secret: string[] | undefined): { env: Record<string, string>; secretEnv?: Record<string, string> } {
-  if (!secret?.length) return { env: all };
+ *  rest, so they go through tmux's private launcher, never its command line;
+ *  the org's `env` goes with them, under the launch's own. */
+function splitSecret(all: Record<string, string>, secret: string[] | undefined): { env: Record<string, string>; secretEnv: Record<string, string> } {
   const env = { ...all };
-  const secretEnv: Record<string, string> = {};
-  for (const k of secret) if (k in env) { secretEnv[k] = env[k]!; delete env[k]; }
+  const secretEnv: Record<string, string> = { ...readOrg()?.env };
+  for (const k of secret ?? []) if (k in env) { secretEnv[k] = env[k]!; delete env[k]; }
   return { env, secretEnv };
 }
 

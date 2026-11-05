@@ -15,6 +15,7 @@ agentbox org init <name> --store <mongodb uri> [--skills owner/repo]
                                              start an org (its store's database in the URI's path); prints its invite
 agentbox org join <invite>                   join the org an invite is for
 agentbox org default org|personal            where a session starts when it does not say (--org, --personal) and has no parent
+agentbox org env [NAME=value | NAME=]...     the variables every session gets (shown by name); set or remove some
 agentbox org invite                          the invite for the next member: it is the org's store and key, send it privately
 agentbox org share <account>                 put an account's login in the org's pool; it stays yours
 agentbox org unshare <account>               take it out of the pool: the org's members lose it, you keep it
@@ -46,7 +47,7 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       const store = flags.get("store");
       if (!name || typeof store !== "string") throw new Error("org init <name> --store <mongodb uri>");
       const skills = typeof flags.get("skills") === "string" ? (flags.get("skills") as string) : null;
-      const org: OrgConfig = { name, store, key: newOrgKey(), skills };
+      const org: OrgConfig = { name, store, key: newOrgKey(), skills, env: {} };
       writeOrg(org);
       try {
         await reach(org);
@@ -73,6 +74,20 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       await ensureServer();
       await api("PUT", "/api/settings", { scope });
       console.log(`sessions start ${scope === "org" ? `in ${readOrg()?.name ?? "the org"}` : "on your own accounts"} unless they say otherwise`);
+      return 0;
+    }
+    case "env": {
+      const org = readOrg();
+      if (!org) throw new Error("this machine is in no org");
+      for (const w of words) {
+        const [k, ...v] = w.split("=");
+        if (!v.length) throw new Error("org env NAME=value (NAME= removes it)");
+        if (v.join("=")) org.env[k!] = v.join("=");
+        else delete org.env[k!];
+      }
+      if (words.length) writeOrg(org);
+      console.log(Object.keys(org.env).join("\n") || "no variables");
+      if (words.length) console.log("new sessions get them here; the other members get them with a new invite (agentbox org invite, then org join)");
       return 0;
     }
     case "invite": {

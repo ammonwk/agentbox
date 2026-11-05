@@ -17,6 +17,8 @@ export interface OrgConfig {
   key: string;
   /** The GitHub repo of its skills, `owner/name`, or null. */
   skills: string | null;
+  /** Variables every session this machine starts gets (INTERNAL_URL, AGENT_TOKEN). */
+  env: Record<string, string>;
 }
 
 export const orgConfigPath = (): string => join(agentboxHome(), "org.json");
@@ -67,7 +69,9 @@ function checkOrg(v: unknown): OrgConfig {
   if (typeof o.store !== "string" || !/^mongodb(\+srv)?:\/\/[^/]+\/[\w-]+/.test(o.store)) throw new Error("an org's store is a mongodb:// URI naming its database");
   if (typeof o.key !== "string" || Buffer.from(o.key, "base64").length !== 32) throw new Error("an org's key is 32 bytes, base64");
   if (o.skills != null && (typeof o.skills !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(o.skills))) throw new Error("an org's skills are a GitHub repo, owner/name");
-  return { name: o.name.trim(), store: o.store, key: o.key, skills: o.skills ?? null };
+  const env = o.env ?? {};
+  if (typeof env !== "object" || Object.entries(env).some(([k, v]) => !/^[A-Z_][A-Z0-9_]*$/.test(k) || typeof v !== "string")) throw new Error("an org's env is NAME: string");
+  return { name: o.name.trim(), store: o.store, key: o.key, skills: o.skills ?? null, env };
 }
 
 const INVITE = "agentbox-org:";
