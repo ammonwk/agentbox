@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AccountView, AppState, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
+import type { AccountView, AppState, CreditBalance, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
 import { api, useNow } from "../api";
 import { accountProvider, ORG_PROVIDERS } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
@@ -432,8 +432,9 @@ function AccountCard({
         />
       </div>
       {refresh.error ? <p className="error-line">Refresh failed: {refresh.error}</p> : null}
-      {a.usage.notes.length > 0 ? (
+      {a.usage.notes.length > 0 || a.usage.credits ? (
         <ul className="ac-notes">
+          {a.usage.credits ? <li>{creditsLine(a.usage.credits)}</li> : null}
           {a.usage.notes.map((n) => (
             <li key={n}>{n}</li>
           ))}
@@ -610,6 +611,19 @@ function AccountCard({
  * account's usage, and you can spend one — the account is re-read straight
  * away, so sessions stopped at its limit are told to carry on.
  */
+/** "credits: 43,370 · ~608/day this week · ~71 days left" */
+function creditsLine(c: CreditBalance): string {
+  if (c.balance === "unlimited") return "credits: unlimited";
+  const n = (v: number) => Math.round(v).toLocaleString("en-US");
+  const parts = [`credits: ${n(c.balance)}`];
+  if (c.perDay !== null) {
+    const span = c.spanDays >= 6.5 ? "this week" : `over ${Math.round(c.spanDays)} days`;
+    if (c.perDay < 0.5) parts.push(`none spent ${span}`);
+    else parts.push(`~${n(c.perDay)}/day ${span}`, `~${n(c.balance / c.perDay)} days left`);
+  }
+  return parts.join(" · ");
+}
+
 function ResetCreditsPanel({ account: a }: { account: AccountView }) {
   const resets = a.usage.resets ?? null;
   const { run, busy, error } = useAction();

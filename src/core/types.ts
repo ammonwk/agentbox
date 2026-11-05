@@ -108,6 +108,17 @@ export interface ResetConsumeResult {
   windowsReset: number;
 }
 
+/** A credit balance as the provider reports it: a number, or no limit. */
+export type CreditReading = number | "unlimited";
+
+export interface CreditBalance {
+  balance: CreditReading;
+  /** Credits spent per day on average over `spanDays` (the last week, or
+   *  less while the history is shorter); null under a day of history. */
+  perDay: number | null;
+  spanDays: number;
+}
+
 export interface AccountUsage {
   accountId: string;
   /** When these numbers were true, not when we last tried. */
@@ -116,8 +127,11 @@ export interface AccountUsage {
   /** Why the numbers are old or missing: "token expired", "429 until 14:02". */
   stale: string | null;
   source: "endpoint" | "cache" | "rollout" | "cli" | "none";
-  /** Anything else worth a line: extra-usage state, credits, a locked reason. */
+  /** Anything else worth a line: extra-usage state, a locked reason. */
   notes: string[];
+  /** Codex: the account's credit balance and its recent spend. Absent for
+   *  every other provider. */
+  credits?: CreditBalance | null;
   /** Codex: usage-limit resets left to spend (docs/v2.md, Usage). Absent for
    *  every other provider, and on readings that never carried one. */
   resets?: ResetCredits | null;

@@ -13,20 +13,13 @@
  */
 
 import type { AskStep } from "./claude-ask";
-
-/** A usage reading a transcript carries: its windows and the account notes
- *  (the credit balance) the provider reported with them. */
-export interface TranscriptUsage {
-  at: number;
-  windows: UsageWindow[];
-  notes: string[];
-}
 import type { RewindGoal, RewindState, RewindStep } from "./claude-rewind";
 import type { CarryWhere } from "../launch";
 import type {
   Account,
   AskAnswer,
   AskQuestion,
+  CreditReading,
   PromptMenu,
   ProviderId,
   QueuedMessage,
@@ -35,6 +28,14 @@ import type {
   TokenTotals,
   UsageWindow,
 } from "../types";
+
+/** A usage reading a transcript carries: its windows and the credit balance
+ *  the provider reported with them. */
+export interface TranscriptUsage {
+  at: number;
+  windows: UsageWindow[];
+  credits: CreditReading | null;
+}
 
 /** One transcript on disk, found by `listTranscripts`. */
 export interface TranscriptRef {

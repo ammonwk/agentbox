@@ -25,13 +25,13 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
-import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow } from "../db";
-import type { Account, AccountProvider, AccountUsage, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
+import { creditSamplesSince, getKv, insertCreditSample, insertUsageSample, lastUsageSample, setKv, type CreditSample, type UsageSampleRow } from "../db";
+import type { Account, AccountProvider, AccountUsage, CreditBalance, CreditReading, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
 import { hasGoCredential } from "./gocred";
-import { codexCreditsNote } from "../providers/codex-transcript";
+import { codexCredits } from "../providers/codex-transcript";
 import type { TranscriptUsage } from "../providers/types";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
@@ -62,7 +62,7 @@ const CODEX_RESET_CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit
 const DEVIN_STATUS_PATH = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 
 export type Reading =
-  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null }
+  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null; credits?: CreditReading | null }
   /** We chose not to ask (token expired, scope missing, not logged in). */
   | { kind: "skip"; stale: string }
   | { kind: "error"; stale: string; rateLimited?: boolean; retryAfterMs?: number | null; unauthorized?: boolean };
@@ -317,7 +317,7 @@ function codexWindow(w: unknown, now: number, prefix?: { id: string; label: stri
  * (e.g. a Spark model) and become model-scoped windows. The same body carries
  * the reset-credit count (`rate_limit_reset_credits`).
  */
-export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null; resets: ResetCredits | null } {
+export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null; resets: ResetCredits | null; credits: CreditReading | null } {
   const b = rec(body) ?? {};
   const windows: UsageWindow[] = [];
   const notes: string[] = [];
@@ -339,8 +339,6 @@ export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindo
     }
     if (erl.limit_reached === true) notes.push(`${name}: limit reached`);
   }
-  const credits = codexCreditsNote(b.credits);
-  if (credits) notes.push(credits);
   const rc = rec(b.rate_limit_reset_credits);
   const availableCount = toNum(rc?.available_count);
   const applicableCount = toNum(rc?.applicable_available_count);
@@ -348,7 +346,7 @@ export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindo
     availableCount !== null
       ? { availableCount: Math.max(0, Math.floor(availableCount)), applicableCount: applicableCount === null ? null : Math.max(0, Math.floor(applicableCount)), credits: [] }
       : null;
-  return { windows, notes, plan: typeof b.plan_type === "string" ? b.plan_type : null, resets };
+  return { windows, notes, plan: typeof b.plan_type === "string" ? b.plan_type : null, resets, credits: codexCredits(b.credits) };
 }
 
 /** `GET /wham/rate-limit-reset-credits` → the credits themselves. Timestamps
@@ -439,9 +437,9 @@ export async function fetchCodexUsage(account: Pick<Account, "home">, deps: Usag
     return { kind: "error", stale: "usage endpoint returned something that is not JSON" };
   }
   const at = deps.now();
-  const { windows, notes, resets } = mapCodexUsage(body, at);
+  const { windows, notes, resets, credits } = mapCodexUsage(body, at);
   if (windows.length === 0) return { kind: "error", stale: "usage endpoint returned no windows" };
-  return { kind: "ok", at, windows, notes, source: "endpoint", resets: await enrichCodexResets(resets, headers, deps) };
+  return { kind: "ok", at, windows, notes, source: "endpoint", credits, resets: await enrichCodexResets(resets, headers, deps) };
 }
 
 export type { ResetOutcome, ResetConsumeResult } from "../types";
@@ -673,6 +671,45 @@ export function shouldSample(last: UsageSampleRow | null, w: UsageWindow, at: nu
   return at - last.at >= SAMPLE_EVERY_MS;
 }
 
+/** A rise bigger than this is credits bought; a smaller one is two sessions
+ *  reporting the balance a few seconds apart. */
+const CREDIT_TOP_UP = 100;
+const CREDIT_SAMPLE_EVERY_MS = 10 * MIN;
+const CREDIT_SPAN_MS = 7 * DAY;
+
+/** Credits spent across a run of balances: every fall below the lowest
+ *  balance since the last top-up. A top-up starts a new floor rather than
+ *  counting as negative spend. */
+export function creditsSpent(balances: number[]): number {
+  let floor = balances[0] ?? 0;
+  let spent = 0;
+  for (const b of balances) {
+    if (b < floor) {
+      spent += floor - b;
+      floor = b;
+    } else if (b - floor > CREDIT_TOP_UP) floor = b;
+  }
+  return spent;
+}
+
+/** Keep a balance reading (one per ten minutes, and every top-up), then say
+ *  what the last week spent of it. */
+export function creditBalance(chatgptAccount: string, at: number, balance: CreditReading): CreditBalance {
+  if (balance === "unlimited") return { balance, perDay: null, spanDays: 0 };
+  const since = at - CREDIT_SPAN_MS;
+  const samples = creditSamplesSince(chatgptAccount, since);
+  const last = samples.at(-1);
+  const fresh = !last || at > last.at;
+  if (!last || (fresh && (at - last.at >= CREDIT_SAMPLE_EVERY_MS || balance - last.balance > CREDIT_TOP_UP))) insertCreditSample(chatgptAccount, at, balance);
+  const series: CreditSample[] = fresh ? [...samples, { at, balance }] : samples;
+  const spanMs = at - Math.max(series[0]!.at, since);
+  return {
+    balance,
+    perDay: spanMs >= DAY ? creditsSpent(series.map((s) => s.balance)) / (spanMs / DAY) : null,
+    spanDays: spanMs / DAY,
+  };
+}
+
 export function recordSamples(accountId: string, at: number, windows: UsageWindow[], source: string): number {
   let n = 0;
   for (const w of windows) {
@@ -778,7 +815,7 @@ export class UsageService extends EventEmitter {
    */
   ingestRollout(accountId: string, reading: TranscriptUsage): boolean {
     if (reading.windows.length === 0) return false;
-    const took = this.accept(accountId, { kind: "ok", at: reading.at, windows: reading.windows, notes: reading.notes, source: "rollout" });
+    const took = this.accept(accountId, { kind: "ok", at: reading.at, windows: reading.windows, notes: [], source: "rollout", credits: reading.credits });
     if (took) {
       const account = this.opts.accounts().find((a) => a.id === accountId);
       if (account) this.postpone(account, reading.at);
@@ -917,6 +954,7 @@ export class UsageService extends EventEmitter {
       // A rollout reading carries no reset credits: keep what the last
       // endpoint reading found rather than forgetting them.
       resets: r.resets === undefined ? (cur.resets ?? null) : r.resets,
+      credits: r.credits == null ? null : creditBalance(this.chatgptAccountOf(accountId), r.at, r.credits),
     };
     try {
       recordSamples(accountId, r.at, r.windows, r.source);
@@ -927,6 +965,11 @@ export class UsageService extends EventEmitter {
     }
     this.store(next);
     return true;
+  }
+
+  private chatgptAccountOf(accountId: string): string {
+    const account = this.opts.accounts().find((a) => a.id === accountId);
+    return (account && readCodexAuth(account.home)?.accountId) || accountId;
   }
 
   private markStale(accountId: string, stale: string | null): void {

@@ -493,6 +493,17 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // 41 — the choices a decision offers, a JSON array, so the card can show them.
   `ALTER TABLE cards ADD COLUMN options TEXT;`,
+  // 42 — codex credit balances over time, so the card can say what they are
+  // being spent at. Credits belong to the ChatGPT account, which several
+  // logins can share, so that is the key.
+  `
+  CREATE TABLE credit_samples (
+    chatgpt_account TEXT NOT NULL,
+    at              INTEGER NOT NULL,
+    balance         REAL NOT NULL
+  );
+  CREATE INDEX credit_samples_acct ON credit_samples (chatgpt_account, at);
+  `,
 ];
 
 function migrate(d: Database) {
@@ -1156,6 +1167,28 @@ export function insertUsageSample(accountId: string, at: number, w: UsageWindow,
      VALUES (?,?,?,?,?,?,?)`,
     [accountId, at, w.id, w.kind, w.usedPct, w.resetsAt, source],
   );
+}
+
+export interface CreditSample {
+  at: number;
+  balance: number;
+}
+
+export function insertCreditSample(chatgptAccount: string, at: number, balance: number): void {
+  getDb().run(`INSERT INTO credit_samples (chatgpt_account,at,balance) VALUES (?,?,?)`, [chatgptAccount, at, balance]);
+}
+
+/** The samples since `sinceMs`, oldest first, led by the last one before it:
+ *  the balance the window opened at. */
+export function creditSamplesSince(chatgptAccount: string, sinceMs: number): CreditSample[] {
+  return getDb()
+    .query(
+      `SELECT at, balance FROM (SELECT at, balance FROM credit_samples WHERE chatgpt_account = ?1 AND at < ?2 ORDER BY at DESC LIMIT 1)
+       UNION ALL
+       SELECT at, balance FROM credit_samples WHERE chatgpt_account = ?1 AND at >= ?2
+       ORDER BY at`,
+    )
+    .all(chatgptAccount, sinceMs) as CreditSample[];
 }
 
 export interface UsageSampleRow {

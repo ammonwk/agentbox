@@ -21,7 +21,7 @@
  */
 
 import { addUsage, emptyTotals } from "../pricing";
-import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
+import type { CreditReading, TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
 import { PrRepoFold } from "../prrepo";
 import { isFleetNote } from "../sent";
 import { loadFields, saveFields } from "./foldstate";
@@ -128,11 +128,11 @@ function contentText(content: unknown): string {
  */
 /** The account's credit balance, as the usage endpoint and a rollout's
  *  `rate_limits` both report it: `{has_credits, unlimited, balance}`. */
-export function codexCreditsNote(credits: any): string | null {
-  if (credits?.unlimited === true) return "credits: unlimited";
+export function codexCredits(credits: any): CreditReading | null {
+  if (credits?.unlimited === true) return "unlimited";
   const balance = Number(credits?.balance);
   if (credits?.has_credits !== true || credits.balance == null || !Number.isFinite(balance)) return null;
-  return `credits: ${balance.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  return balance;
 }
 
 export function codexWindows(rl: any): UsageWindow[] {
@@ -253,7 +253,7 @@ export class CodexFold {
   private reported: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   private windows = new Map<string, UsageWindow[]>();
   private usageAt: number | null = null;
-  private creditsNote: string | null = null;
+  private credits: CreditReading | null = null;
   private limited = false;
   private hits: { at: number; detail: string }[] = [];
 
@@ -412,7 +412,7 @@ export class CodexFold {
         this.windows.set(typeof rl.limit_id === "string" ? rl.limit_id : "codex", windows);
         this.usageAt = at ?? this.usageAt;
       }
-      if (rl.credits !== undefined) this.creditsNote = codexCreditsNote(rl.credits);
+      if (rl.credits !== undefined) this.credits = codexCredits(rl.credits);
       // Repeated on every token_count while limited; one hit per episode.
       const reached = rl.rate_limit_reached_type;
       if (reached && !this.limited) this.hit(at, `rate limit reached: ${typeof reached === "string" ? reached : JSON.stringify(reached)}`);
@@ -447,7 +447,7 @@ export class CodexFold {
       contextUsed: this.contextUsed,
       contextLimit: this.contextLimit,
       tokens: { ...this.tokens },
-      usage: windows.length && this.usageAt !== null ? { at: this.usageAt, windows, notes: this.creditsNote ? [this.creditsNote] : [] } : null,
+      usage: windows.length && this.usageAt !== null ? { at: this.usageAt, windows, credits: this.credits } : null,
       rateLimitHits: [...this.hits],
       isSubagent: l?.isSubagent ?? false,
       parentId: l?.parentId ?? null,
