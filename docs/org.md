@@ -13,11 +13,12 @@ The code is `src/core/org/` (config, seal, store, accounts, skills, and the
 **The store.** One MongoDB database, `agentbox_plaibook` on the nonprod Atlas
 cluster, reached with a database user (`agentbox-plaibook`) that can touch only
 that database. Every member's machine calls out to it, polling; nothing calls
-in. A store that only admits a SOCKS5 proxy takes the driver's own URI
-options, `?proxyHost=127.0.0.1&proxyPort=<port>` (the `socks` dependency is
-what makes them work; without it the driver hangs). The invite carries the
-URI as it is, so every member then needs that proxy at that address. Two
-collections:
+in. Atlas admits only our AWS network, so the store is reached through a
+SOCKS5 proxy on the team tailnet (below), with the driver's own URI options,
+`?proxyHost=<proxy's tailnet address>&proxyPort=1080` (the `socks`
+dependency is what makes them work; without it the driver hangs). The invite
+carries the URI as it is, so a member needs a tailnet login and nothing
+else. Two collections:
 
 | collection | a row | written by |
 |---|---|---|
@@ -33,11 +34,18 @@ access control.
 invite` prints it again; `agentbox org join <invite>` writes
 `<agentbox home>/org.json` (0600): the org's name, the store URI, the org key
 (AES-256-GCM, for the logins at rest: the cluster has other users and
-backups), and the skills repo. There is no member list. Trust is per org:
+backups), the skills repo, and `env`: variables every session the machine
+starts gets (`INTERNAL_URL` and `AGENT_TOKEN`, for plaibook-internal's
+`/api/work`), passed with a launch's secrets so no command line shows them.
+`agentbox org env NAME=value` sets one (`NAME=` removes it); the other
+members get it with a new invite, which `org join` takes over the old.
+There is no member list. Trust is per org:
 every member's agents can read `org.json` and so every pooled login, because
 that is what pooling is. **Removing someone** is changing the database user's
 password, sending the rest a new invite, and logging every org account in
-again (they could have copied the refresh tokens; nothing else revokes them).
+again (they could have copied the refresh tokens; nothing else revokes them),
+and deleting their devices from the tailnet (`sudo headscale nodes delete -i
+<id>` on the headscale box, which takes the store's proxy from them).
 
 **Scope is the session's** (`sessions.scope`), set when it starts and kept:
 a resume, a hop, a wake, a fork or a recovery stays in it because
@@ -189,6 +197,73 @@ read for every account. So an org skill reaches every session on a member's
 machine, personal ones too, and a personal skill of the same name (in any of
 those, or `~/.agents/skills`) wins. Publishing is a pull request or a push to
 the repo.
+
+## The tailnet
+
+The members' machines and the store's proxy are on one tailnet, run by our
+own headscale (`headscale.plaibook.tech`); the files are `scripts/tailnet/`.
+Joining a device is a one-use pre-auth key from `scripts/tailnet/key.sh
+<user>` (24 hours) and `sudo tailscale login --login-server
+https://headscale.plaibook.tech --authkey <key>`, which keeps the device's
+other Tailscale account as a profile (`tailscale switch` goes back; a
+device is on one at a time). It needs root: the operator setting is per
+profile, so an operator's login to a new server is refused and leaves the
+device logged out of both. `scripts/tailnet/move-here.sh` does it on a
+machine of Ammon's. A phone or GUI client set to that custom coordination
+server shows an auth id instead, approved with `sudo headscale auth register
+--auth-id <id> --user <user>` on the box. Each person is a headscale user
+(`ammon`, `nate`, `maxwell`, `tanner`, `austin`). The policy
+(`scripts/tailnet/policy.hujson`, at `/etc/headscale/policy.hujson`,
+reloaded with `systemctl reload headscale`) lets each person reach their own
+devices and every member reach the proxy's port 1080, and nothing else;
+agentbox's own tailnet listener also answers only its owner's devices
+(`tailscale whois`).
+
+**Ammon's own devices.** His phone, Mac and fedora stay on his personal
+tailnet, where the board has its HTTPS name (headscale cannot issue
+`tailscale cert` certificates, and the phone needs HTTPS for the mic). fedora
+is on the team tailnet as well, through a second, unprivileged tailscaled
+(`~/.config/systemd/user/tailscale-work.service`, userspace networking, state
+in `~/.local/share/tailscale-work`), and reaches plaibook-box1 (100.64.0.5,
+moved 11-05; netdata bound to that address) through it with an `ssh`
+`ProxyCommand tailscale --socket=… nc %h %p` in `~/.ssh/config`. Its own
+store goes through its AWS tunnel (127.0.0.1:27180), so its invite is
+`scripts/tailnet/invite.sh`, which swaps in the proxy's address.
+
+**The proxy** is `atlas-proxy`, 100.64.0.2, a node tagged
+`tag:atlas-proxy` on `plaibook-ssm-jump` (i-0b4dcd834f3fde8a2), the host in
+the VPC that already holds everyone's Session Manager tunnels and whose NAT
+addresses Atlas admits. `scripts/tailnet/atlas-proxy.sh` installs Tailscale,
+joins it and runs a SOCKS5 server (`atlas-proxy.service`) on its tailnet
+address that connects only to the nonprod cluster's members
+(`*.9b4l8.mongodb.net:27017`). The host is terraform's
+(`plaibook-platform/infrastructure/ssm-jump-host.tf`) and keeps none of this
+if it is replaced: run the script again over SSM, with a key from
+`ssh ubuntu@54.84.189.218 sudo headscale preauthkeys create --tags
+tag:atlas-proxy`; if its address changed, change it in `invite.sh` and
+send everyone a new invite. No security group or access
+list changed for it: Tailscale needs only outbound 443 (its DERP relays,
+since the host allows no UDP out).
+
+    aws ssm send-command --instance-ids i-0b4dcd834f3fde8a2 --document-name AWS-RunShellScript \
+      --parameters "$(jq -n --rawfile s scripts/tailnet/atlas-proxy.sh --arg k "$KEY" \
+        '{commands: [("set -- " + $k), $s]}')"
+
+**The headscale box** (EC2 i-0fc452f9ad83f9f6d, t4g.micro, Ubuntu 24.04 arm64,
+in its own VPC vpc-0855b10b572742f35, Elastic IP 54.84.189.218, security group
+sg-0d1060f954b4c8803 with 443 open; tagged `ManagedBy=manual-agentbox`, not
+terraform; SSH as `ubuntu@54.84.189.218`). To rebuild it: the headscale
+v0.29.5 arm64 .deb from GitHub's releases and Ubuntu's `caddy`; the shipped
+`/etc/headscale/config.yaml` with `server_url:
+https://headscale.plaibook.tech`, `listen_addr: 127.0.0.1:8080`,
+`policy.path: /etc/headscale/policy.hujson`, `dns.base_domain:
+tail.plaibook.tech` and `dns.override_local_dns: false`; and
+`/etc/caddy/Caddyfile` is `headscale.plaibook.tech { reverse_proxy
+127.0.0.1:8080 }`. DERP is Tailscale's public one. A Route53 A record in
+`plaibook.tech` points the name at the Elastic IP. The box is itself a
+node (`headscale`, 100.64.0.1, `tag:server`), and the root disk is encrypted
+(swapped 10-31, SOC 2). Its state is `/var/lib/headscale/db.sqlite`; losing
+it means every device joins again.
 
 ## When things fail
 
