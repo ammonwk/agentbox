@@ -917,6 +917,10 @@ export interface AgentSettings {
   /** Remove the worktrees with nothing to lose every night at 3am
    *  (src/core/nightly.ts). */
   reclaimNightly: boolean;
+  /** Whether sessions can hand the user cards on the Review page. Off, the
+   *  server refuses `agentbox card add` from a session and the briefing tells
+   *  every session to ask the user in its own conversation instead. */
+  reviewCards: boolean;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
   /** Models no session runs on, each to the one that takes its place: a

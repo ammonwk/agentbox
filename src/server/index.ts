@@ -46,7 +46,7 @@ import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushS
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { contextDocs, readContextDoc, writeContextDoc } from "./context";
-import { briefingText } from "../core/providers/briefing";
+import { CARDS_OFF, briefingText } from "../core/providers/briefing";
 import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
@@ -1402,6 +1402,7 @@ const router = new Router(mapError)
   .add("POST", "/api/cards", async ({ req }) => {
     const b = await readBody(req);
     const kind = requireString(b, "kind") as CardKind;
+    if (!getSettings().reviewCards) throw new HttpError(409, CARDS_OFF);
     if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);

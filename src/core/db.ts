@@ -1587,6 +1587,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
+  reviewCards: true,
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
   retiredModels: {},
   scope: "personal",

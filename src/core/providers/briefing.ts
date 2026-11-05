@@ -1,3 +1,4 @@
+import { getSettings } from "../db";
 import { repoRulesFor, rulesPath, standingRules } from "../rules";
 
 /**
@@ -23,8 +24,18 @@ const BRIEFING = [
   "Search only the tree that can hold the answer. Never `grep -r` or `find` in `$HOME`, `/`, `/tmp`, `~/.local/share/agentbox`, or `~/Documents`: those are hundreds of GB and millions of files, so a search there runs for minutes on one core. In a repo use `rg` with `-g '!node_modules'`; for a filename, `find` with `-maxdepth`; for conversations, `agentbox grep --all`. `| head` does not stop a search — bound it with `-m1` or a smaller root. Put `</dev/null` on a search whose file list may be empty: `grep` with no files reads stdin and waits forever.",
 ].join("\n\n");
 
+/** What `POST /api/cards` answers a session with while Review cards are off. */
+export const CARDS_OFF =
+  "Review cards are off: the user turned them off in Settings. Ask your question or give your news in this conversation instead, with your recommendation, and end your turn to wait for the answer.";
+
+/** Said to every session while Review cards are off (Settings), so that it
+ *  asks in its own conversation and does not try `agentbox card add` first.
+ *  It overrides any rule or skill that says to send a card. */
+const CARDS_OFF_BRIEFING =
+  "Review cards are off. Do not run `agentbox card add`: the server refuses it. When you need a decision from the user, or have something to tell them, ask or tell them directly in this conversation, with your recommendation, and end your turn to wait. This holds over any rule or skill that says to send a card.";
+
 /** The exact text a session is given, for the Context page: briefing only. */
-export const briefingText = (): string => BRIEFING;
+export const briefingText = (): string => (getSettings().reviewCards ? BRIEFING : `${BRIEFING}\n\n${CARDS_OFF_BRIEFING}`);
 
 /**
  * The briefing with the user's standing rules after it, and then the rules of
@@ -33,7 +44,7 @@ export const briefingText = (): string => BRIEFING;
  * restart of the server; `cwd` is what picks the repo (`core/rules.ts`).
  */
 export function briefing(cwd?: string): string {
-  const parts = [BRIEFING];
+  const parts = [briefingText()];
   const rules = standingRules();
   if (rules) parts.push(`The user's standing rules for every session (${rulesPath()}):\n\n${rules}`);
   const repo = cwd ? repoRulesFor(cwd) : null;
