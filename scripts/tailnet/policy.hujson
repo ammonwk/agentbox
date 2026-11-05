@@ -1,0 +1,15 @@
+// The team tailnet's policy (headscale.plaibook.tech, /etc/headscale/policy.hujson;
+// docs/org.md "The tailnet"). Each person reaches their own devices, every member
+// reaches the org store's proxy, and Ammon reaches the servers. Nothing else: one
+// member's devices are not another's to reach.
+{
+  "tagOwners": {
+    "tag:server": ["ammon@"],
+    "tag:atlas-proxy": ["ammon@"],
+  },
+  "acls": [
+    { "action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self:*"] },
+    { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:atlas-proxy:1080"] },
+    { "action": "accept", "src": ["ammon@"], "dst": ["tag:server:*", "tag:atlas-proxy:*"] },
+  ],
+}
