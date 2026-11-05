@@ -18,10 +18,6 @@
  * successor (`agentbox handover`) gives it its cards (`moveCards`), as it does
  * its children.
  *
- * A session can also ask by ending its turn `STATUS: needs …`, which only
- * someone opening the conversation reads. Once such a turn has sat an hour and
- * been parked, the ask becomes a card (`carryAsks`).
- *
  * Cards are the user's, not a conversation, so they live in the database.
  * A decision's default and its time are the asker's to act on; agentbox only
  * shows that the time has passed.
@@ -29,8 +25,7 @@
 
 import { getDb } from "./db";
 import { FleetError, type Fleet } from "./fleet";
-import { turnStatus } from "./turnstatus";
-import type { Card, CardKind, CardState, Session } from "./types";
+import type { Card, CardKind, CardState } from "./types";
 
 export const CARD_KINDS: readonly CardKind[] = ["decision", "merged", "note"];
 /** How long an answer waits before it is typed into the session: the undo. */
@@ -42,11 +37,6 @@ const DONE_SHOWN = 200;
 const TITLE_MAX = 200;
 const SHORT_MAX = 1200;
 const LONG_MAX = 200_000;
-/** A turn that ended `STATUS: needs …` this long ago, parked, with no card: the ask becomes one. */
-const ASK_AFTER_MS = 60 * 60_000;
-/** One older than this is history (its work moved on, or you chose to leave it), not a new question. */
-const ASK_WITHIN_MS = 24 * 60 * 60_000;
-const ASK_CHECK_MS = 60_000;
 
 type Row = {
   id: number; kind: CardKind; title: string; short: string; long: string | null; pr: string | null; options: string | null; recommend: string | null;
@@ -108,28 +98,6 @@ export function openAsks(): Map<string, string[]> {
   return out;
 }
 
-/** The card a session's last turn asks for: a turn that ended `STATUS: needs …`
- *  an hour ago and was parked, nobody having answered it or sat with it. Its
- *  `lastMessage` is only the end of the message: the words above the line are
- *  for the caller to read and put in `long`. */
-export function askOf(s: Session, now: number): NewCard | null {
-  if (s.closedAt !== null || s.parkedAt === null || s.subagent || s.quiet) return null;
-  const age = now - s.lastActivityAt;
-  if (age < ASK_AFTER_MS || age > ASK_WITHIN_MS) return null;
-  const status = turnStatus(s.lastMessage);
-  if (status?.kind !== "needs") return null;
-  const ask = status.text.replace(/^needs\s+\S+[\s—:–-]*/i, "") || status.text;
-  return {
-    kind: "decision",
-    title: /^.*?[?.](?=\s|$)/.exec(ask)?.[0] ?? ask,
-    short: ask,
-    recommend: /[^.;?!—]*\brecommend\b[^.;?!]*/i.exec(ask)?.[0]?.trim() ?? null,
-    key: `needs:${s.id}:${Bun.hash(ask).toString(36)}`,
-    sessionId: s.id,
-    about: s.id,
-  };
-}
-
 export class Cards {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pushing: Card[] = [];
@@ -147,21 +115,6 @@ export class Cards {
   start(): void {
     const rows = getDb().query(`SELECT * FROM cards WHERE state = 'answered' AND answer <> '' AND delivered_at IS NULL AND tried_at IS NULL`).all() as Row[];
     for (const r of rows) this.deliverLater(r.id, Math.max(0, (r.answered_at ?? 0) + UNDO_MS - this.now()));
-    setInterval(() => void this.carryAsks().catch((e) => console.error("agentbox: asks:", e)), ASK_CHECK_MS).unref?.();
-  }
-
-  /** A card for each ask left in a conversation, unless one already covers that session. */
-  private async carryAsks(): Promise<void> {
-    const rows = getDb().query(`SELECT session_id, about FROM cards WHERE kind = 'decision' AND state IN ('open','later')`).all() as { session_id: string | null; about: string | null }[];
-    const covered = new Set(rows.flatMap((r) => [r.session_id, r.about]));
-    for (const s of this.fleet.sessions()) {
-      if (covered.has(s.id)) continue;
-      const card = askOf(s, this.now());
-      if (!card || getDb().query("SELECT 1 FROM cards WHERE key = ?").get(card.key!)) continue;
-      const page = await this.fleet.timeline(s.id, null, 5).catch(() => null);
-      const said = page?.events.filter((e) => e.kind === "assistant").at(-1);
-      this.add({ ...card, long: said?.kind === "assistant" ? said.text : null });
-    }
   }
 
   private row(id: number): Row {
