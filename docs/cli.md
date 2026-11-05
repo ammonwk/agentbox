@@ -291,6 +291,9 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   `[card 12 “title”] …`; an empty answer means they saw it, and nothing is
   typed. Write the short version so it can be answered from a phone without
   opening anything, give a recommendation, and never add a card for progress.
+  Asking for a login, password, code or other access: find read-only who holds
+  it and every step it will take first, then ask once with all of them (11-04:
+  RingCentral cost 5 cards in 4 hours, one per hurdle as each came).
   If the session that asked is gone, the answer waits: `card list --answered
   --unread`, act on it, then `card ack`.
 - Prefer reading `show` and the tail of `log` over whole transcripts; they
