@@ -224,8 +224,8 @@ tailnet, where the board has its HTTPS name (headscale cannot issue
 `tailscale cert` certificates, and the phone needs HTTPS for the mic). fedora
 is on the team tailnet as well, through a second, unprivileged tailscaled
 (`~/.config/systemd/user/tailscale-work.service`, userspace networking, state
-in `~/.local/share/tailscale-work`), and reaches plaibook-box1 (100.64.0.5,
-moved 11-05; netdata bound to that address) through it with an `ssh`
+in `~/.local/share/tailscale-work`), and reaches plaibook-box1 and box2
+(100.64.0.5 and 100.64.0.7, moved 11-05; netdata bound to those) through it with an `ssh`
 `ProxyCommand tailscale --socket=… nc %h %p` in `~/.ssh/config`. Its own
 store goes through its AWS tunnel (127.0.0.1:27180), so its invite is
 `scripts/tailnet/invite.sh`, which swaps in the proxy's address.
