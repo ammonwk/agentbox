@@ -13,6 +13,14 @@
  */
 
 import type { AskStep } from "./claude-ask";
+
+/** A usage reading a transcript carries: its windows and the account notes
+ *  (the credit balance) the provider reported with them. */
+export interface TranscriptUsage {
+  at: number;
+  windows: UsageWindow[];
+  notes: string[];
+}
 import type { RewindGoal, RewindState, RewindStep } from "./claude-rewind";
 import type { CarryWhere } from "../launch";
 import type {
@@ -193,7 +201,7 @@ export interface TranscriptFacts {
   tokens: TokenTotals;
   /** Rate-limit windows the transcript itself reports (codex `token_count`).
    *  The newest reading only. */
-  usage: { at: number; windows: UsageWindow[] } | null;
+  usage: TranscriptUsage | null;
   /** Each time the provider said it hit a limit. */
   rateLimitHits: LimitHit[];
   /** Provider subagent / sidechain transcripts are folded into their parent

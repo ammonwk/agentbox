@@ -126,6 +126,15 @@ function contentText(content: unknown): string {
  * the account's own limit; others (e.g. "codex_bengalfox", limit_name
  * "GPT-5.3-Codex-Spark") are per-model limits.
  */
+/** The account's credit balance, as the usage endpoint and a rollout's
+ *  `rate_limits` both report it: `{has_credits, unlimited, balance}`. */
+export function codexCreditsNote(credits: any): string | null {
+  if (credits?.unlimited === true) return "credits: unlimited";
+  const balance = Number(credits?.balance);
+  if (credits?.has_credits !== true || credits.balance == null || !Number.isFinite(balance)) return null;
+  return `credits: ${balance.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
 export function codexWindows(rl: any): UsageWindow[] {
   if (!rl || typeof rl !== "object") return [];
   const limitId = typeof rl.limit_id === "string" ? rl.limit_id : "codex";
@@ -244,6 +253,7 @@ export class CodexFold {
   private reported: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   private windows = new Map<string, UsageWindow[]>();
   private usageAt: number | null = null;
+  private creditsNote: string | null = null;
   private limited = false;
   private hits: { at: number; detail: string }[] = [];
 
@@ -402,6 +412,7 @@ export class CodexFold {
         this.windows.set(typeof rl.limit_id === "string" ? rl.limit_id : "codex", windows);
         this.usageAt = at ?? this.usageAt;
       }
+      if (rl.credits !== undefined) this.creditsNote = codexCreditsNote(rl.credits);
       // Repeated on every token_count while limited; one hit per episode.
       const reached = rl.rate_limit_reached_type;
       if (reached && !this.limited) this.hit(at, `rate limit reached: ${typeof reached === "string" ? reached : JSON.stringify(reached)}`);
@@ -436,7 +447,7 @@ export class CodexFold {
       contextUsed: this.contextUsed,
       contextLimit: this.contextLimit,
       tokens: { ...this.tokens },
-      usage: windows.length && this.usageAt !== null ? { at: this.usageAt, windows } : null,
+      usage: windows.length && this.usageAt !== null ? { at: this.usageAt, windows, notes: this.creditsNote ? [this.creditsNote] : [] } : null,
       rateLimitHits: [...this.hits],
       isSubagent: l?.isSubagent ?? false,
       parentId: l?.parentId ?? null,

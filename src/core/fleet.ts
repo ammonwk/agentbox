@@ -78,6 +78,7 @@ import {
   type TranscriptFacts,
   type TranscriptReader,
   type TranscriptRef,
+  type TranscriptUsage,
 } from "./providers/types";
 import { argvOf, childrenOf, cwdOf, environOf, isAlive, jobUnitOf, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { sessionCapability } from "./session-authority";
@@ -223,7 +224,7 @@ export interface UsageSource {
   /** The account's login state, if known. */
   authOf?(accountId: string): AccountAuth["state"] | null;
   /** Codex reports its limits inside the rollout; hand fresher readings over. */
-  ingestRollout?(accountId: string, reading: { at: number; windows: UsageWindow[] }): void;
+  ingestRollout?(accountId: string, reading: TranscriptUsage): void;
 }
 
 /** What the fleet needs of the org's pool (src/core/org/index.ts). */

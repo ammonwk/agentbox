@@ -31,6 +31,8 @@ import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
 import { hasGoCredential } from "./gocred";
+import { codexCreditsNote } from "../providers/codex-transcript";
+import type { TranscriptUsage } from "../providers/types";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
 const MIN = 60_000;
@@ -337,9 +339,8 @@ export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindo
     }
     if (erl.limit_reached === true) notes.push(`${name}: limit reached`);
   }
-  const credits = rec(b.credits);
-  if (credits?.unlimited === true) notes.push("credits: unlimited");
-  else if (credits?.has_credits === true && credits.balance != null) notes.push(`credits: ${String(credits.balance)}`);
+  const credits = codexCreditsNote(b.credits);
+  if (credits) notes.push(credits);
   const rc = rec(b.rate_limit_reset_credits);
   const availableCount = toNum(rc?.available_count);
   const applicableCount = toNum(rc?.applicable_available_count);
@@ -775,9 +776,9 @@ export class UsageService extends EventEmitter {
    * is newer than what we have; a fresh one also postpones the endpoint call,
    * since a running session is already telling us.
    */
-  ingestRollout(accountId: string, reading: { at: number; windows: UsageWindow[] }): boolean {
+  ingestRollout(accountId: string, reading: TranscriptUsage): boolean {
     if (reading.windows.length === 0) return false;
-    const took = this.accept(accountId, { kind: "ok", at: reading.at, windows: reading.windows, notes: [], source: "rollout" });
+    const took = this.accept(accountId, { kind: "ok", at: reading.at, windows: reading.windows, notes: reading.notes, source: "rollout" });
     if (took) {
       const account = this.opts.accounts().find((a) => a.id === accountId);
       if (account) this.postpone(account, reading.at);

@@ -9,6 +9,7 @@
 import { EventEmitter } from "node:events";
 import { deleteAccount, dismissDefault, getAccount, insertAccount, listAccounts, restoreAccount, updateAccount } from "../db";
 import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
+import type { TranscriptUsage } from "../providers/types";
 import type { ExecFn } from "./exec";
 import {
   AccountError,
@@ -247,7 +248,7 @@ export class AccountsService extends EventEmitter {
   }
 
   /** Feed a codex rollout reading (see UsageService.ingestRollout). */
-  ingestRollout(accountId: string, reading: { at: number; windows: UsageWindow[] }): boolean {
+  ingestRollout(accountId: string, reading: TranscriptUsage): boolean {
     return this.usage.ingestRollout(accountId, reading);
   }
 
