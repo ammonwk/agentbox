@@ -7,7 +7,7 @@
  * wrote runs in an origin of its own, never as the board.
  */
 
-import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import { closeSync, openSync, readSync, realpathSync, statSync, type Stats } from "node:fs";
 import { basename, extname, isAbsolute, resolve } from "node:path";
 import { userHome } from "./paths";
 import { localFileLink } from "./filelinks";
@@ -19,7 +19,6 @@ export class FileError extends Error {
 /** Text past this is cut, with the viewer saying so: a phone renders a
  *  megabyte of lines, not a log of a hundred. */
 export const MAX_TEXT_BYTES = 1024 * 1024;
-const MAX_ENTRIES = 2000;
 
 /** The file or directory `ref` names, as an agent wrote it: absolute, `~/…`,
  *  `file://…`, or relative, with any `:line` suffix dropped. A relative path
@@ -67,7 +66,6 @@ export interface FileView {
   /** Markdown and text: the first `MAX_TEXT_BYTES`, cut at a line. */
   text?: string;
   truncated?: boolean;
-  entries?: { name: string; dir: boolean; size: number }[];
 }
 
 const MIME: Record<string, string> = {
@@ -124,28 +122,8 @@ function readHead(path: string, bytes: number): Uint8Array {
 export function viewFile(ref: string, dirs: readonly string[]): FileView {
   const { path, stat } = resolveLocal(ref, dirs);
   const base = { path, name: basename(path) || path, size: stat.size, mtimeMs: stat.mtimeMs };
-  if (stat.isDirectory()) {
-    let names: Dirent[];
-    try {
-      names = readdirSync(path, { withFileTypes: true });
-    } catch (e) {
-      throw new FileError(403, `cannot list ${path}: ${(e as Error).message}`);
-    }
-    const entries = names.slice(0, MAX_ENTRIES).map((d) => {
-      let dir = d.isDirectory();
-      let size = 0;
-      try {
-        const st = statSync(`${path}/${d.name}`);
-        dir = st.isDirectory();
-        size = st.size;
-      } catch {
-        /* a dangling link: listed as it is */
-      }
-      return { name: d.name, dir, size };
-    });
-    entries.sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
-    return { ...base, kind: "directory", entries, truncated: names.length > MAX_ENTRIES };
-  }
+  // A folder is not listed here: the viewer hands it to the desktop's file explorer.
+  if (stat.isDirectory()) return { ...base, kind: "directory" };
   const kind = kindByName(path);
   if (kind && kind !== "markdown") return { ...base, kind };
   const head = readHead(path, Math.min(stat.size, MAX_TEXT_BYTES));

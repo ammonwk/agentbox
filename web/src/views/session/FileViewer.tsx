@@ -8,7 +8,7 @@ import { Markdown } from "./Markdown";
 import { SessionLinks } from "./sessionlinks";
 import { useAction } from "./useAction";
 import "./fileviewer.css";
-import { closeViewer, FileBase, openInViewer, stepViewer, trailAt, useOnThisMachine, useViewerStack, viewerBack, type ViewerEntry } from "./viewerstore";
+import { closeViewer, FileBase, stepViewer, trailAt, useOnThisMachine, useViewerStack, viewerBack, type ViewerEntry } from "./viewerstore";
 import { stepOf } from "../../lib/previews";
 
 const PdfView = lazy(() => import("./PdfView"));
@@ -77,6 +77,21 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
     };
   }, [entry.session, entry.path, entry.dirs]);
 
+  // A folder is the desktop's: on this machine it opens in the file explorer
+  // and the viewer steps back off it. Read elsewhere, it is only named.
+  const folder = loaded.state === "ok" && loaded.file.kind === "directory" ? loaded.file.path : null;
+  useEffect(() => {
+    if (!folder || !here) return;
+    let live = true;
+    api.openFile(entry.session, folder).then(
+      () => live && viewerBack(),
+      (e: Error) => live && setLoaded({ state: "error", message: e.message }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [folder, here, entry.session]);
+
   // Escape closes the viewer and nothing under it; the page under it stays
   // put. ← and → step to the files beside the link it was opened from. An
   // image shown full size over it takes the keys first.
@@ -109,7 +124,6 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
   const FileIcon = iconOf(file);
   const textual = file?.kind === "text" || (file?.kind === "markdown" && source);
   const lineCount = file?.text ? file.text.split("\n").length - (file.text.endsWith("\n") ? 1 : 0) : 0;
-  const open = (path: string, from?: HTMLElement) => openInViewer({ session: entry.session, path }, from);
 
   const copy = () => {
     if (!file) return;
@@ -128,7 +142,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
       return !w;
     });
   };
-  const desktopLabel = file?.kind === "pdf" || file?.kind === "html" ? "Open in desktop browser" : file?.kind === "directory" ? "Open in file explorer" : "Show in file explorer";
+  const desktopLabel = file?.kind === "pdf" || file?.kind === "html" ? "Open in desktop browser" : "Show in file explorer";
 
   return (
     <div className="fv-backdrop" onMouseDown={(e) => e.target === e.currentTarget && closeViewer()}>
@@ -145,14 +159,18 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
           <div className="fv-title">
             <h2 title={file?.path ?? entry.path}>{name}</h2>
             <div className="fv-sub">
-              {dir ? (
-                <button type="button" className="fv-dir" title={`Open ${dir}`} onClick={() => open(dir)}>
+              {dir && here ? (
+                <button type="button" className="fv-dir" title={`Open ${dir} in the file explorer`} onClick={() => void desktop.run(() => api.openFile(entry.session, dir))}>
                   <bdi>{dir}</bdi>
                 </button>
+              ) : dir ? (
+                <span className="fv-dir">
+                  <bdi>{dir}</bdi>
+                </span>
               ) : null}
               {file ? (
                 <span className="fv-meta">
-                  {file.kind === "directory" ? `${file.entries?.length ?? 0} item${file.entries?.length === 1 ? "" : "s"}` : fmtBytes(file.size)}
+                  {file.kind === "directory" ? "Folder" : fmtBytes(file.size)}
                   {lineCount ? ` · ${lineCount.toLocaleString()} lines` : null} · <RelativeTime ts={file.mtimeMs} short />
                 </span>
               ) : null}
@@ -199,7 +217,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
           </div>
         </header>
         <div className="fv-body">
-          {loaded.state === "loading" ? (
+          {loaded.state === "loading" || (folder && here) ? (
             <div className="fv-empty">
               <Spinner size={18} />
             </div>
@@ -210,7 +228,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
               <p className="fv-empty-detail">{loaded.message}</p>
             </div>
           ) : (
-            <Body file={loaded.file} session={entry.session} source={source} wrap={wrap} lines={lines} open={open} here={here} />
+            <Body file={loaded.file} session={entry.session} source={source} wrap={wrap} lines={lines} here={here} />
           )}
         </div>
       </div>
@@ -218,17 +236,16 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
   );
 }
 
-function Body({ file, session, source, wrap, lines, open, here }: {
+function Body({ file, session, source, wrap, lines, here }: {
   file: FileView;
   session: string;
   source: boolean;
   wrap: boolean;
   lines: [number, number] | null;
-  open: (path: string, from?: HTMLElement) => void;
   here: boolean;
 }) {
   const raw = rawFileUrl(file.path);
-  const cut = file.truncated && file.kind !== "directory" ? (
+  const cut = file.truncated ? (
     <div className="fv-cut">
       Showing the first {fmtBytes(new TextEncoder().encode(file.text ?? "").length)} of {fmtBytes(file.size)}.{" "}
       <a href={rawFileUrl(file.path, true)} download={file.name}>Download the whole file</a>
@@ -268,37 +285,10 @@ function Body({ file, session, source, wrap, lines, open, here }: {
       );
     case "directory":
       return (
-        <div className="fv-scroll">
-          <ul className="fv-list">
-            {file.path !== "/" ? (
-              <li>
-                <button type="button" onClick={() => open(parentOf(file.path))}>
-                  <Icon.arrowUp size={16} />
-                  <span className="fv-list-name">..</span>
-                </button>
-              </li>
-            ) : null}
-            {file.entries?.map((e) => {
-              const path = `${file.path === "/" ? "" : file.path}/${e.name}`;
-              return (
-              <li key={e.name}>
-                <button
-                  type="button"
-                  data-preview={e.dir ? undefined : "file"}
-                  data-target={JSON.stringify({ session, path })}
-                  data-label={e.name}
-                  onClick={(ev) => open(path, ev.currentTarget)}
-                >
-                  {e.dir ? <Icon.folder size={16} weight="duotone" /> : <Icon.file size={16} />}
-                  <span className="fv-list-name">{e.name}</span>
-                  {e.dir ? null : <span className="fv-list-size">{fmtBytes(e.size)}</span>}
-                </button>
-              </li>
-              );
-            })}
-          </ul>
-          {file.entries?.length === 0 ? <p className="fv-empty-detail fv-pad">This folder is empty.</p> : null}
-          {file.truncated ? <div className="fv-cut">Showing the first {file.entries?.length} entries.</div> : null}
+        <div className="fv-empty">
+          <Icon.folder size={32} weight="duotone" />
+          <p className="fv-empty-title">A folder</p>
+          <p className="fv-empty-detail">Folders open in the file explorer on the computer agentbox runs on.</p>
         </div>
       );
     default:
