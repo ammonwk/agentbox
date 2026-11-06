@@ -115,7 +115,9 @@ export function SystemBar({
             ))}
           </span>
           <span className="sys-figs">
-            <b data-warn={cpuTone(sys.cpu * 100) === "warn"} data-bad={cpuTone(sys.cpu * 100) === "bad"}>{Math.round(sys.cpu * 100)}%</b>
+            {/* The whole machine is red only when it is full; a share of it (a
+                session, a program) has its own scale, cpuTone. */}
+            <b data-bad={Math.round(sys.cpu * 100) >= 98}>{Math.round(sys.cpu * 100)}%</b>
             <span className="faint">{sys.cores} cores</span>
           </span>
         </span>
