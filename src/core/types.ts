@@ -1488,7 +1488,8 @@ export interface Card {
   /** The user's words; "" when it was only seen. */
   answer: string | null;
   answeredAt: number | null;
-  /** When the answer was typed into the asker, or a session said it has it. */
+  /** When the answer reached a session: typed into the asker, which then took a
+   *  turn on it, or a session said it has it (`card ack`). */
   deliveredAt: number | null;
   /** Answered in words that no session has yet. */
   unread: boolean;

@@ -12,7 +12,9 @@
  * The answer is held `UNDO_MS` before it is typed, so the last gesture can be
  * taken back; once typed it cannot. A session with a decision open holds it
  * as it would a wait (`openAsks`): it may be parked, but it does not close
- * itself. When the asker is gone or you closed it the answer waits on the card
+ * itself. Typed is not read: the answer is delivered once the asker has taken
+ * a turn on it (`TAKEN`). Until then, and for good when the asker is gone, you
+ * closed it, or it closes before reading it, the answer waits on the card
  * (`unread`), for whichever session asks (`agentbox card list --answered
  * --unread`) and says it has it (`card ack`). A session handed over to a
  * successor (`agentbox handover`) gives it its cards (`moveCards`), as it does
@@ -42,15 +44,26 @@ type Row = {
   id: number; kind: CardKind; title: string; short: string; long: string | null; pr: string | null; options: string | null; recommend: string | null;
   default_text: string | null; default_at: number | null; key: string | null; session_id: string | null; about: string | null;
   state: CardState; answer: string | null; answered_at: number | null; delivered_at: number | null; tried_at: number | null;
-  later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
+  typed_at: number | null; taken: number; later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
 };
+
+/** A session has the answer: one said so (`ack`, which sets `delivered_at`),
+ *  or the asker's transcript took a prompt after the answer was typed and the
+ *  model was called after that. A prompt alone is not enough: 8utngauw
+ *  recorded card 671's and was closed before any reply. Providers that do not
+ *  report model calls (`lastTurnAt`) go by the prompt. */
+const TAKEN = `(delivered_at IS NOT NULL OR COALESCE((SELECT json_extract(facts, '$.lastPromptAt') >= cards.typed_at
+  AND COALESCE(json_extract(facts, '$.lastTurnAt'), json_extract(facts, '$.lastPromptAt')) >= cards.typed_at
+  FROM sessions WHERE sessions.id = cards.session_id), 0))`;
+const UNREAD = `state = 'answered' AND answer <> '' AND NOT ${TAKEN}`;
+const CARDS = `SELECT cards.*, ${TAKEN} AS taken FROM cards`;
 
 function toCard(r: Row, withLong: boolean): Card {
   return {
     id: r.id, kind: r.kind, title: r.title, short: r.short, hasLong: !!r.long, ...(withLong ? { long: r.long } : {}),
     pr: r.pr, options: r.options ? (JSON.parse(r.options) as string[]) : [], recommend: r.recommend, default: r.default_text, defaultAt: r.default_at, key: r.key,
     sessionId: r.session_id, about: r.about, state: r.state, answer: r.answer, answeredAt: r.answered_at,
-    deliveredAt: r.delivered_at, unread: r.state === "answered" && !!r.answer && r.delivered_at === null,
+    deliveredAt: r.delivered_at ?? (r.taken ? r.typed_at : null), unread: r.state === "answered" && !!r.answer && !r.taken,
     laterAt: r.later_at, createdAt: r.created_at, closedWhy: r.closed_why,
   };
 }
@@ -84,7 +97,8 @@ export interface CardFilter {
  *  those still to be answered, and answers it never got. */
 export function moveCards(from: string, to: string): number {
   return getDb().run(
-    `UPDATE cards SET session_id = ? WHERE session_id = ? AND (state IN ('open','later') OR (state = 'answered' AND delivered_at IS NULL AND answer <> ''))`,
+    // A typed answer the asker never took waits on the card for the successor.
+    `UPDATE cards SET session_id = ?, typed_at = NULL WHERE session_id = ? AND (state IN ('open','later') OR (${UNREAD}))`,
     [to, from],
   ).changes;
 }
@@ -118,7 +132,7 @@ export class Cards {
   }
 
   private row(id: number): Row {
-    const r = getDb().query("SELECT * FROM cards WHERE id = ?").get(id) as Row | null;
+    const r = getDb().query(`${CARDS} WHERE id = ?`).get(id) as Row | null;
     if (!r) throw new FleetError(404, `no card ${id}`);
     return r;
   }
@@ -135,20 +149,20 @@ export class Cards {
       where.push("state = ?");
       args.push(f.state);
     }
-    if (f.unread) where.push("state = 'answered' AND answer <> '' AND delivered_at IS NULL");
+    if (f.unread) where.push(UNREAD);
     if (f.sessionId) {
       where.push("session_id = ?");
       args.push(f.sessionId);
     }
-    const rows = getDb().query(`SELECT * FROM cards ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC`).all(...args) as Row[];
+    const rows = getDb().query(`${CARDS} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC`).all(...args) as Row[];
     return rows.map((r) => toCard(r, false));
   }
 
   /** What the app is sent: every card still to be answered, and the newest of the rest. */
   shown(): Card[] {
     const db = getDb();
-    const open = db.query(`SELECT * FROM cards WHERE state IN ('open','later') ORDER BY id DESC`).all() as Row[];
-    const done = db.query(`SELECT * FROM cards WHERE state IN ('answered','closed') ORDER BY COALESCE(answered_at, created_at) DESC LIMIT ${DONE_SHOWN}`).all() as Row[];
+    const open = db.query(`${CARDS} WHERE state IN ('open','later') ORDER BY id DESC`).all() as Row[];
+    const done = db.query(`${CARDS} WHERE state IN ('answered','closed') ORDER BY COALESCE(answered_at, created_at) DESC LIMIT ${DONE_SHOWN}`).all() as Row[];
     return [...open, ...done].map((r) => toCard(r, false));
   }
 
@@ -160,7 +174,7 @@ export class Cards {
     if (!title || !short) throw new FleetError(400, "a card needs a title and a short version");
     const key = c.key?.trim() || null;
     if (key) {
-      const have = getDb().query("SELECT * FROM cards WHERE key = ?").get(key) as Row | null;
+      const have = getDb().query(`${CARDS} WHERE key = ?`).get(key) as Row | null;
       if (have) return toCard(have, false);
     }
     const text = (v: string | null | undefined, max = SHORT_MAX) => v?.trim().slice(0, max) || null;
@@ -193,7 +207,7 @@ export class Cards {
   answer(id: number, text: string): Card {
     const r = this.row(id);
     if (r.state === "closed") throw new FleetError(409, `card ${id} was withdrawn: ${r.closed_why ?? "the question went away"}`);
-    if (r.state === "answered" && r.delivered_at !== null) throw new FleetError(409, `card ${id} was answered already, and the answer has gone to its session`);
+    if (r.state === "answered" && (r.taken || r.typed_at !== null)) throw new FleetError(409, `card ${id} was answered already, and the answer has gone to its session`);
     const answer = text.trim();
     if (!answer && r.kind === "decision") throw new FleetError(400, "a decision needs an answer; keep it for later instead");
     const at = this.now();
@@ -249,7 +263,8 @@ export class Cards {
   }
 
   /** Type the answer into the session that asked, once. One that is gone or
-   *  was closed is left alone: the answer waits on the card. `closedAt`, not
+   *  was closed is left alone: the answer waits on the card, as it does until
+   *  the asker takes a turn on it (`TAKEN`). `closedAt`, not
    *  its status: a stopped child under a stopped parent reads "closed" on the
    *  board and is resumed like any parked session. */
   private async deliver(id: number): Promise<void> {
@@ -267,13 +282,15 @@ export class Cards {
       return;
     }
     if (closedAt !== null) return;
+    // Taken before it goes in: the prompt the transcript records is later.
+    const at = this.now();
     try {
       await this.fleet.send(r.session_id, `[card ${r.id} “${r.title}”] ${r.answer}`, undefined, true);
     } catch (e) {
       console.error(`agentbox: card ${id}: its answer could not be typed into ${r.session_id}, and waits on the card: ${(e as Error).message}`);
       return;
     }
-    getDb().run(`UPDATE cards SET delivered_at = ?, undo = NULL WHERE id = ?`, [this.now(), id]);
+    getDb().run(`UPDATE cards SET typed_at = ?, undo = NULL WHERE id = ?`, [at, id]);
     this.changed();
   }
 }

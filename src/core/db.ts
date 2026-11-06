@@ -504,6 +504,9 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX credit_samples_acct ON credit_samples (chatgpt_account, at);
   `,
+  // 43 — when a card's answer was typed into its asker; it is delivered only
+  // once the asker takes a turn on it (src/core/cards.ts).
+  `ALTER TABLE cards ADD COLUMN typed_at INTEGER;`,
 ];
 
 function migrate(d: Database) {
