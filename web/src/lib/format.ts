@@ -124,3 +124,9 @@ export function pct(n: number | null | undefined): string {
 export function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
+
+/** Yellow from a tenth of the machine, red from half of it, wherever a CPU
+ *  figure shows (Ammon's thresholds, 11-06). */
+export function cpuTone(pct: number): "warn" | "bad" | undefined {
+  return pct >= 50 ? "bad" : pct >= 10 ? "warn" : undefined;
+}

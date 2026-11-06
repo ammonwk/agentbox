@@ -31,7 +31,7 @@ import {
   type Shape,
   type SortKey,
 } from "../../lib/board";
-import { baseName, fmtBytes } from "../../lib/format";
+import { baseName, cpuTone, fmtBytes } from "../../lib/format";
 import { openingTab, useIsPhone, usePickedTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf, type SessionTab } from "../../route";
@@ -895,11 +895,10 @@ function RowLoad({ id, folded }: { id: string; folded: boolean }) {
   return (
     <span
       className="rail-load"
-      data-hot={load.cpuPct >= 25 || undefined}
       data-rollup={hidden ? true : undefined}
       title={`CPU ${cpu} (100% is the whole machine) · memory ${fmtBytes(load.memBytes)}${kind} · ${load.procs} process${load.procs === 1 ? "" : "es"}${summed}`}
     >
-      <span>{cpu}</span>
+      <span data-tone={cpuTone(load.cpuPct)}>{cpu}</span>
       <span>{mem}</span>
     </span>
   );

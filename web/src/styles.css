@@ -1692,12 +1692,21 @@ textarea,
 
 /* -------------------------------------------------------- per-session load */
 
-/* A full core or more. Colour alone would fail the contrast test the status
- * pills are held to, so this also gets weight. */
-.proc-table [data-hot="true"] {
+/* CPU tones (cpuTone in lib/format.ts). Colour alone would fail the contrast
+ * test the status pills are held to, so red also gets weight. */
+.proc-table [data-tone="warn"],
+.load-stat b[data-tone="warn"],
+.sysline b[data-tone="warn"] {
   color: var(--warning);
+}
+.proc-table [data-tone="bad"],
+.load-stat b[data-tone="bad"],
+.sysline b[data-tone="bad"] {
+  color: var(--danger);
   font-weight: 650;
 }
+.sysline .seg-used[data-tone="warn"] { background: var(--warning); }
+.sysline .seg-used[data-tone="bad"] { background: var(--danger); }
 
 /* ── The drilldown ── */
 

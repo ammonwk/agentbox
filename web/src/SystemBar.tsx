@@ -3,6 +3,7 @@ import type { AccountView, MetricsState, Session, UsageWindow } from "../../src/
 import { useMetrics, useNow, type SystemState } from "./api";
 import { accountHue, PROVIDER_LABEL } from "./bits";
 import { titleOf } from "./lib/board";
+import { cpuTone } from "./lib/format";
 import { fmtCountdown } from "./lib/format";
 import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
 
@@ -114,7 +115,7 @@ export function SystemBar({
             ))}
           </span>
           <span className="sys-figs">
-            <b>{Math.round(sys.cpu * 100)}%</b>
+            <b data-warn={cpuTone(sys.cpu * 100) === "warn"} data-bad={cpuTone(sys.cpu * 100) === "bad"}>{Math.round(sys.cpu * 100)}%</b>
             <span className="faint">{sys.cores} cores</span>
           </span>
         </span>
@@ -423,7 +424,7 @@ function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: 
     <div className="sysdetail">
       <Block title="cpu by owner" wide>
         {owners.slice(0, 10).map((o) => (
-          <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} note={o.note} frac={o.cpuPct / 100} />
+          <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} tone={cpuTone(o.cpuPct)} note={o.note} frac={o.cpuPct / 100} />
         ))}
         {busy > named + 2 ? <Line label="short-lived" value={`${busy - named}%`} frac={(busy - named) / 100} /> : null}
         <p className="hint">
@@ -559,11 +560,13 @@ function Block({ title, wide, children }: { title: string; wide?: boolean; child
 function Line({
   label,
   value,
+  tone,
   note,
   frac,
 }: {
   label: string;
   value: string;
+  tone?: "warn" | "bad";
   note?: string;
   frac?: number;
 }) {
@@ -572,12 +575,12 @@ function Line({
       <span className="muted">{label}</span>
       {frac !== undefined ? (
         <span className="stackbar thin grow" aria-hidden="true">
-          <i className="seg-used" style={{ width: `${Math.min(100, frac * 100)}%` }} />
+          <i className="seg-used" style={{ width: `${Math.min(100, frac * 100)}%` }} data-tone={tone} />
         </span>
       ) : (
         <span className="grow" />
       )}
-      <b>{value}</b>
+      <b data-tone={tone}>{value}</b>
       {note ? <span className="faint">{note}</span> : null}
     </div>
   );

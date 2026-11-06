@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, fmtBytes, useMetrics, type LoadDetail, type ProcDetail, type ProcRole } from "../../api";
 import { Empty } from "../../components";
-import { fmtDur } from "../../lib/format";
+import { cpuTone, fmtDur } from "../../lib/format";
 
 /**
  * Where a session's CPU and memory actually went.
@@ -106,6 +106,7 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
         <Stat
           label="cpu"
           value={load ? cpuText(load.cpuPct) : "—"}
+          tone={load ? cpuTone(load.cpuPct) : undefined}
           // 100% is the whole machine; the cores it amounts to are beside it.
           note={load ? `of the machine · ${((load.cpuPct * cores) / 100).toFixed(1)} of ${cores} cores` : "of the machine"}
         >
@@ -184,7 +185,7 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
                   <Activity p={p} cores={cores} />
                 </td>
                 <td className="num">
-                  <span data-hot={p.cpuPct * cores >= 80}>{cpuText(p.cpuPct)}</span>
+                  <span data-tone={cpuTone(p.cpuPct)}>{cpuText(p.cpuPct)}</span>
                 </td>
                 <td className="num">
                   <Quiet p={p} />
@@ -215,11 +216,11 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Stat({ label, value, note, children }: { label: string; value: string; note?: string; children?: React.ReactNode }) {
+function Stat({ label, value, tone, note, children }: { label: string; value: string; tone?: string; note?: string; children?: React.ReactNode }) {
   return (
     <div className="load-stat">
       <span className="label">{label}</span>
-      <b>{value}</b>
+      <b data-tone={tone}>{value}</b>
       {note ? <span className="faint">{note}</span> : null}
       {children}
     </div>

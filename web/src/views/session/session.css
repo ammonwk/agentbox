@@ -763,9 +763,6 @@
 .rail-row[aria-current="page"] .rail-load {
   color: var(--muted);
 }
-.rail-load[data-hot] > :first-child {
-  color: var(--warning);
-}
 /* A folded row's figures are its whole subtree's, with the children's own
    columns hidden under it. */
 .rail-load[data-rollup] {
@@ -4074,3 +4071,7 @@ a.wk-item:hover {
     font-size: 16px;
   }
 }
+
+/* CPU tones (cpuTone in lib/format.ts): a tenth of the machine, half of it. */
+.rail-load > [data-tone="warn"] { color: var(--warning); }
+.rail-load > [data-tone="bad"] { color: var(--danger); font-weight: 650; }
