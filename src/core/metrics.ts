@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { SystemMeter, metricsAvailable } from "./system";
 import {
   LoadMeter,
@@ -67,8 +68,8 @@ class Metrics {
   private cur: ProcTable | undefined;
   /** Each measured session's processes as of the last poll, by agent pid. */
   private owned = new Map<number, ProcRow[]>();
-  /** The processes nobody's session claims, and their names, for `elsewhere`. */
-  private names = new Map<number, { startTicks: number; name: string }>();
+  /** Each process's systemd unit, for grouping `elsewhere`. */
+  private units = new Map<number, { startTicks: number; unit: string }>();
 
   private state: MetricsState = { at: 0, system: null, load: {}, elsewhere: [] };
 
@@ -158,57 +159,59 @@ class Metrics {
    * The CPU no session accounts for, by the program it belongs to: the
    * browser, this server, a test run whose session has ended, the kernel.
    *
-   * A process belongs to the outermost ancestor below the service manager (or
-   * init, or kthreadd), so a browser's thirty renderers are one row. Own
-   * utime+stime over the poll, live processes only: what a short-lived child
-   * used is lost, which is why the bar's total can exceed these plus the
-   * sessions.
+   * A program is a systemd unit: the desktop gives every app it launches a
+   * scope, so a browser's thirty renderers are one row and are not lumped in
+   * with the shell that launched them. Own utime+stime over the poll, live
+   * processes only: what a short-lived child used is lost, which is why the
+   * bar's total can exceed these plus the sessions.
    */
   private elsewhere(prev: ProcTable, cur: ProcTable, claimed: Map<number, ProcRow>): CpuOwner[] {
     const secs = (cur.at - prev.at) / 1000;
     if (secs <= 0) return [];
-    const roots = new Map<number, number>();
-    const rootOf = (pid: number): number => {
-      const known = roots.get(pid);
-      if (known !== undefined) return known;
-      const row = cur.byPid.get(pid);
-      const parent = row ? cur.byPid.get(row.ppid) : undefined;
-      const top = !row || !parent || row.ppid <= 2 || parent.comm === "systemd" ? pid : rootOf(row.ppid);
-      roots.set(pid, top);
-      return top;
-    };
-    const groups = new Map<number, { cpuPct: number; procs: number }>();
+    for (const pid of this.units.keys()) if (!cur.byPid.has(pid)) this.units.delete(pid);
+    const groups = new Map<string, { cpuPct: number; procs: number; top: ProcRow }>();
     for (const r of cur.byPid.values()) {
       if (claimed.has(r.pid)) continue;
       const was = prev.byPid.get(r.pid);
       if (!was || was.startTicks !== r.startTicks) continue;
       const pct = ((r.ownTicks - was.ownTicks) / (secs * clockHz())) * 100;
       if (pct <= 0) continue;
-      // Every kernel thread is one owner: there is nothing to tell apart.
-      const key = r.ppid === 2 || r.pid === 2 ? 2 : rootOf(r.pid);
-      const g = groups.get(key) ?? { cpuPct: 0, procs: 0 };
-      g.cpuPct += pct;
-      g.procs++;
-      groups.set(key, g);
+      const key = r.ppid === 2 || r.pid === 2 ? "kernel" : this.unitOf(r);
+      const g = groups.get(key);
+      if (!g) groups.set(key, { cpuPct: pct, procs: 1, top: r });
+      else {
+        g.cpuPct += pct;
+        g.procs++;
+        if (r.startTicks < g.top.startTicks) g.top = r;
+      }
     }
-    for (const pid of this.names.keys()) if (!cur.byPid.has(pid)) this.names.delete(pid);
     return [...groups]
       .sort((a, b) => b[1].cpuPct - a[1].cpuPct)
       .slice(0, 12)
-      .map(([pid, g]) => ({ name: this.nameOf(cur, pid), pid, cpuPct: Math.round(g.cpuPct), procs: g.procs }));
+      .map(([key, g]) => ({ name: this.nameOf(key, g.top), pid: g.top.pid, cpuPct: Math.round(g.cpuPct), procs: g.procs }));
   }
 
-  private nameOf(table: ProcTable, pid: number): string {
-    if (pid === 2) return "kernel";
-    if (pid === process.pid) return "agentbox server";
-    const row = table.byPid.get(pid);
-    if (!row) return String(pid);
-    const known = this.names.get(pid);
-    if (known && known.startTicks === row.startTicks) return known.name;
-    const argv = argvOf(pid);
-    const name = describe({ ...row, cmd: argv?.join(" ") });
-    this.names.set(pid, { startTicks: row.startTicks, name });
-    return name;
+  /** The unit a process runs in, read once per process. */
+  private unitOf(r: ProcRow): string {
+    const known = this.units.get(r.pid);
+    if (known && known.startTicks === r.startTicks) return known.unit;
+    let unit = "";
+    try {
+      unit = readFileSync(`/proc/${r.pid}/cgroup`, "utf8").trim().split("/").pop() ?? "";
+    } catch {
+      /* gone */
+    }
+    // A system service's or another user's process: its unit, or its own pid.
+    unit ||= `pid ${r.pid}`;
+    this.units.set(r.pid, { startTicks: r.startTicks, unit });
+    return unit;
+  }
+
+  private nameOf(key: string, top: ProcRow): string {
+    if (key === "kernel") return "kernel";
+    if (key === serverUnit()) return "agentbox server";
+    const argv = argvOf(top.pid);
+    return describe({ ...top, cmd: argv?.join(" ") });
   }
 
   /**
@@ -244,6 +247,18 @@ class Metrics {
       if (this.slow) this.schedulePss(Math.max(SLOW_INTERVAL_MS, (performance.now() - started) / PSS_BUDGET));
     }
   }
+}
+
+let ownUnit: string | undefined;
+function serverUnit(): string {
+  if (ownUnit === undefined) {
+    try {
+      ownUnit = readFileSync("/proc/self/cgroup", "utf8").trim().split("/").pop() ?? "";
+    } catch {
+      ownUnit = "";
+    }
+  }
+  return ownUnit;
 }
 
 const metrics = new Metrics();
