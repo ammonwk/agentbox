@@ -426,7 +426,7 @@ function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: 
         {owners.slice(0, 10).map((o) => (
           <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} tone={cpuTone(o.cpuPct)} note={o.note} frac={o.cpuPct / 100} />
         ))}
-        {busy > named + 2 ? <Line label="short-lived" value={`${busy - named}%`} frac={(busy - named) / 100} /> : null}
+        {busy > named + 2 ? <Line label="short-lived" value={`${busy - named}%`} tone={cpuTone(busy - named)} frac={(busy - named) / 100} /> : null}
         <p className="hint">
           Share of the whole machine. A session counts everything it started, its
           shell commands and their test databases included. Load {sys.load1.toFixed(0)} is the threads
