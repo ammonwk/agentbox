@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
-import type { AccountView, Session, UsageWindow } from "../../src/core/types";
+import type { AccountView, MetricsState, Session, UsageWindow } from "../../src/core/types";
 import { useMetrics, useNow, type SystemState } from "./api";
 import { accountHue, PROVIDER_LABEL } from "./bits";
+import { titleOf } from "./lib/board";
 import { fmtCountdown } from "./lib/format";
 import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
 
@@ -73,6 +74,7 @@ export function SystemBar({
   // Load against cores is the honest form. "49.7" means nothing without the 14
   // beside it; 3.5x oversubscribed means everything.
   const oversub = sys.cores ? sys.load1 / sys.cores : 0;
+  const owners = cpuOwners(metrics!, sessions);
 
   const cpuTemp = sys.temps.find((t) => t.name === "cpu");
   // Rank by proximity to each sensor's own critical, not by raw degrees: DIMMs
@@ -99,7 +101,13 @@ export function SystemBar({
         aria-label={open ? "Hide machine detail" : "Show machine detail"}
       >
         {/* ── Cores ── */}
-        <span className="sys-cell" title={`${sys.cores} cores, each bar one core`}>
+        <span
+          className="sys-cell"
+          title={
+            `${sys.cores} cores, each bar one core; ${sys.cores * 100}% is all of them.\n` +
+            owners.slice(0, 8).map((o) => `${o.cpuPct}%  ${o.name}`).join("\n")
+          }
+        >
           <span className="corebars" aria-hidden="true">
             {sys.perCore.map((v, i) => (
               <i key={i} style={{ height: `${Math.max(4, v * 100)}%` }} data-hot={v > 0.85} />
@@ -299,7 +307,7 @@ export function SystemBar({
       {extras}
       </div>
 
-      {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}
+      {open ? <SystemDetail sys={sys} owners={owners} limits={limits} now={now} /> : null}
     </div>
   );
 }
@@ -408,9 +416,24 @@ function Div() {
 }
 
 /** The expanded sheet: everything the one-line bar had to leave out. */
-function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountView[]; now: number }) {
+function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: Owner[]; limits: AccountView[]; now: number }) {
+  const total = sys.cores * 100;
+  const named = owners.reduce((a, o) => a + o.cpuPct, 0);
+  const busy = Math.round(sys.cpu * total);
   return (
     <div className="sysdetail">
+      <Block title="cpu by owner" wide>
+        {owners.slice(0, 10).map((o) => (
+          <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} note={o.note} frac={o.cpuPct / total} />
+        ))}
+        {busy > named + 20 ? <Line label="short-lived" value={`${busy - named}%`} frac={(busy - named) / total} /> : null}
+        <p className="hint">
+          Percent of one core; all {sys.cores} are {total}%. A session counts everything it started, its
+          shell commands and their test databases included. Load {sys.load1.toFixed(0)} is the threads
+          running or waiting for a core{sys.psiCpu !== undefined ? `; something waited ${sys.psiCpu.toFixed(0)}% of the last ten seconds` : ""}.
+        </p>
+      </Block>
+
       {limits.length > 0 ? (
         <Block title="subscriptions">
           <div className="syslimits">
@@ -505,9 +528,29 @@ function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountV
   );
 }
 
-function Block({ title, children }: { title: string; children: ReactNode }) {
+interface Owner {
+  key: string;
+  name: string;
+  cpuPct: number;
+  note?: string;
+}
+
+/** Sessions and the programs outside them, busiest first, in one list. */
+function cpuOwners(metrics: MetricsState, sessions: readonly Session[]): Owner[] {
+  const out: Owner[] = [];
+  for (const s of sessions) {
+    const l = metrics.load[s.id];
+    if (l && l.cpuPct >= 1) out.push({ key: s.id, name: titleOf(s), cpuPct: Math.round(l.cpuPct), note: `${l.procs} procs` });
+  }
+  for (const o of metrics.elsewhere ?? []) {
+    if (o.cpuPct >= 1) out.push({ key: `p${o.pid}`, name: o.name, cpuPct: o.cpuPct, note: `outside · ${o.procs}` });
+  }
+  return out.sort((a, b) => b.cpuPct - a.cpuPct);
+}
+
+function Block({ title, wide, children }: { title: string; wide?: boolean; children: ReactNode }) {
   return (
-    <section className="sysblock">
+    <section className={wide ? "sysblock wide" : "sysblock"}>
       <div className="label">{title}</div>
       {children}
     </section>

@@ -223,6 +223,60 @@ export function subtree(table: ProcTable, pid: number): ProcRow[] {
 }
 
 /**
+ * The session each process works for, by the `AGENTBOX_SESSION` it inherited.
+ *
+ * A session's work does not stay under its agent: every shell command is moved
+ * into a scope of its own (~/.claude/scripts/agent-command.py) and a
+ * `wait job` runs under the service manager, so a jest run and the databases
+ * it starts are reparented away from the agent that asked for them. They keep
+ * its environment, though, and that is what claims them here.
+ *
+ * An environment is fixed at exec, so each process is read once, keyed by pid
+ * and start time.
+ */
+const tagCache = new Map<number, { startTicks: number; session: string | null }>();
+
+export function sessionTags(table: ProcTable): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const pid of tagCache.keys()) if (!table.byPid.has(pid)) tagCache.delete(pid);
+  if (darwin.isDarwin) return out;
+  for (const r of table.byPid.values()) {
+    let hit = tagCache.get(r.pid);
+    if (!hit || hit.startTicks !== r.startTicks) {
+      let session: string | null = null;
+      try {
+        session = /(?:^|\0)AGENTBOX_SESSION=([^\0]+)/.exec(readFileSync(`/proc/${r.pid}/environ`, "latin1"))?.[1] ?? null;
+      } catch {
+        /* another user's, a kernel thread, or gone */
+      }
+      hit = { startTicks: r.startTicks, session };
+      tagCache.set(r.pid, hit);
+    }
+    if (!hit.session) continue;
+    const list = out.get(hit.session);
+    if (list) list.push(r.pid);
+    else out.set(hit.session, [r.pid]);
+  }
+  return out;
+}
+
+/** Everything a session is running: its agent's subtree, and every process
+ *  carrying its id along with what those started. Each process once. */
+export function sessionRows(table: ProcTable, agentPid: number, tagged: number[] = []): ProcRow[] {
+  const seen = new Set<number>();
+  const out: ProcRow[] = [];
+  for (const root of [agentPid, ...tagged]) {
+    if (seen.has(root)) continue;
+    for (const r of subtree(table, root)) {
+      if (seen.has(r.pid)) continue;
+      seen.add(r.pid);
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+/**
  * Total CPU consumed by a subtree, in clock ticks.
  *
  * The subtlety is short-lived processes. A poll every two seconds misses every
@@ -267,8 +321,7 @@ export class LoadMeter {
   private prior = new Map<number, Prior>();
   private pss = new Map<number, { bytes: number; at: number }>();
 
-  sample(table: ProcTable, pid: number): LoadSample | undefined {
-    const rows = subtree(table, pid);
+  sample(table: ProcTable, pid: number, rows: ProcRow[]): LoadSample | undefined {
     if (rows.length === 0) {
       this.prior.delete(pid);
       return undefined;
@@ -580,9 +633,9 @@ export async function breakdown(
   cur: ProcTable,
   agentPid: number,
   watch: ProcWatch,
-  opts: { pss?: boolean } = {},
+  opts: { pss?: boolean; tagged?: number[] } = {},
 ): Promise<ProcDetail[]> {
-  const rows = withCmdlines(subtree(cur, agentPid));
+  const rows = withCmdlines(sessionRows(cur, agentPid, opts.tagged));
   const byPid = new Map(rows.map((r) => [r.pid, r]));
   const agent = byPid.get(agentPid);
   if (!agent) return [];
@@ -621,6 +674,13 @@ export async function breakdown(
     }
   };
   await walk(agentPid, 0);
+  // Commands moved out of the agent's tree hang under it here as the tool
+  // calls they are: each top of a detached group, once.
+  const shown = new Set(out.map((d) => d.pid));
+  for (const r of rows) {
+    if (shown.has(r.pid) || byPid.has(r.ppid)) continue;
+    await walk(r.pid, 1, "agent");
+  }
   return out;
 }
 

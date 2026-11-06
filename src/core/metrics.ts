@@ -4,14 +4,18 @@ import {
   LoadMeter,
   ProcWatch,
   breakdown,
+  argvOf,
+  clockHz,
+  describe,
   readProcTable,
+  sessionRows,
+  sessionTags,
   sharedProcTable,
-  subtree,
   subtreePss,
   type ProcRow,
   type ProcTable,
 } from "./proc";
-import type { LoadDetail, MetricsState } from "./types";
+import type { CpuOwner, LoadDetail, MetricsState } from "./types";
 
 /**
  * The machine, and what each session is taking from it.
@@ -61,8 +65,12 @@ class Metrics {
   private measuringPss = false;
 
   private cur: ProcTable | undefined;
+  /** Each measured session's processes as of the last poll, by agent pid. */
+  private owned = new Map<number, ProcRow[]>();
+  /** The processes nobody's session claims, and their names, for `elsewhere`. */
+  private names = new Map<number, { startTicks: number; name: string }>();
 
-  private state: MetricsState = { at: 0, system: null, load: {} };
+  private state: MetricsState = { at: 0, system: null, load: {}, elsewhere: [] };
 
   snapshot(): MetricsState {
     return this.state;
@@ -86,11 +94,12 @@ class Metrics {
   }
 
   /** The live process table, for `GET /api/sessions/:id/load`. */
-  async detail(pid: number): Promise<LoadDetail> {
+  async detail(id: string, pid: number): Promise<LoadDetail> {
     // On demand rather than from the poll: this is the one caller that wants
     // per-process PSS, and it is the most expensive read in the product.
     const cur = await readProcTable();
-    return { history: this.meter.history(pid), procs: await breakdown(cur, pid, this.watch, { pss: true }) };
+    const tagged = sessionTags(cur).get(id);
+    return { history: this.meter.history(pid), procs: await breakdown(cur, pid, this.watch, { pss: true, tagged }) };
   }
 
   private async poll(): Promise<void> {
@@ -104,25 +113,32 @@ class Metrics {
       // The same table as the last poll (the fleet's, shared): nothing new to divide.
       if (table && table === this.cur) return;
 
+      const prev = this.cur;
       if (table) this.cur = table;
 
       const load: MetricsState["load"] = {};
+      let elsewhere = this.state.elsewhere;
       if (table) {
         const live = new Set<number>();
         // A subagent's subtree sits inside its caller's: each process once.
         const watched = new Map<number, ProcRow>();
+        const tags = sessionTags(table);
+        this.owned.clear();
         // Closed sessions are excluded: one that still holds a pid is a leak to
         // fix elsewhere, not a row on this bar.
         for (const s of source()) {
           if (s.pid === null) continue; // no pid means no reading — blank, not zero
           live.add(s.pid);
-          const sample = this.meter.sample(table, s.pid);
+          const rows = sessionRows(table, s.pid, tags.get(s.id));
+          const sample = this.meter.sample(table, s.pid, rows);
           if (!sample) continue;
           load[s.id] = sample;
-          for (const r of subtree(table, s.pid)) watched.set(r.pid, r);
+          this.owned.set(s.pid, rows);
+          for (const r of rows) watched.set(r.pid, r);
         }
         this.meter.retain(live);
         await this.watch.sample(table, [...watched.values()]);
+        if (prev) elsewhere = this.elsewhere(prev, table, watched);
       }
 
       this.state = {
@@ -130,11 +146,69 @@ class Metrics {
         // Keep the last good reading rather than blanking on one failed sweep.
         system: system ?? this.state.system,
         load,
+        elsewhere,
       };
       metricsEvents.emit("metrics", this.state);
     } finally {
       this.polling = false;
     }
+  }
+
+  /**
+   * The CPU no session accounts for, by the program it belongs to: the
+   * browser, this server, a test run whose session has ended, the kernel.
+   *
+   * A process belongs to the outermost ancestor below the service manager (or
+   * init, or kthreadd), so a browser's thirty renderers are one row. Own
+   * utime+stime over the poll, live processes only: what a short-lived child
+   * used is lost, which is why the bar's total can exceed these plus the
+   * sessions.
+   */
+  private elsewhere(prev: ProcTable, cur: ProcTable, claimed: Map<number, ProcRow>): CpuOwner[] {
+    const secs = (cur.at - prev.at) / 1000;
+    if (secs <= 0) return [];
+    const roots = new Map<number, number>();
+    const rootOf = (pid: number): number => {
+      const known = roots.get(pid);
+      if (known !== undefined) return known;
+      const row = cur.byPid.get(pid);
+      const parent = row ? cur.byPid.get(row.ppid) : undefined;
+      const top = !row || !parent || row.ppid <= 2 || parent.comm === "systemd" ? pid : rootOf(row.ppid);
+      roots.set(pid, top);
+      return top;
+    };
+    const groups = new Map<number, { cpuPct: number; procs: number }>();
+    for (const r of cur.byPid.values()) {
+      if (claimed.has(r.pid)) continue;
+      const was = prev.byPid.get(r.pid);
+      if (!was || was.startTicks !== r.startTicks) continue;
+      const pct = ((r.ownTicks - was.ownTicks) / (secs * clockHz())) * 100;
+      if (pct <= 0) continue;
+      // Every kernel thread is one owner: there is nothing to tell apart.
+      const key = r.ppid === 2 || r.pid === 2 ? 2 : rootOf(r.pid);
+      const g = groups.get(key) ?? { cpuPct: 0, procs: 0 };
+      g.cpuPct += pct;
+      g.procs++;
+      groups.set(key, g);
+    }
+    for (const pid of this.names.keys()) if (!cur.byPid.has(pid)) this.names.delete(pid);
+    return [...groups]
+      .sort((a, b) => b[1].cpuPct - a[1].cpuPct)
+      .slice(0, 12)
+      .map(([pid, g]) => ({ name: this.nameOf(cur, pid), pid, cpuPct: Math.round(g.cpuPct), procs: g.procs }));
+  }
+
+  private nameOf(table: ProcTable, pid: number): string {
+    if (pid === 2) return "kernel";
+    if (pid === process.pid) return "agentbox server";
+    const row = table.byPid.get(pid);
+    if (!row) return String(pid);
+    const known = this.names.get(pid);
+    if (known && known.startTicks === row.startTicks) return known.name;
+    const argv = argvOf(pid);
+    const name = describe({ ...row, cmd: argv?.join(" ") });
+    this.names.set(pid, { startTicks: row.startTicks, name });
+    return name;
   }
 
   /**
@@ -160,8 +234,8 @@ class Metrics {
       if (!table) return;
       for (const s of source()) {
         if (s.pid === null) continue;
-        const rows = subtree(table, s.pid);
-        if (rows.length === 0) continue;
+        const rows = this.owned.get(s.pid);
+        if (!rows?.length) continue;
         const bytes = await subtreePss(rows).catch(() => undefined);
         if (bytes !== undefined) this.meter.putPss(s.pid, bytes);
       }
@@ -199,4 +273,4 @@ export function setMetricsWatchers(n: number): void {
 }
 
 export const metricsSnapshot = (): MetricsState => metrics.snapshot();
-export const procDetail = (pid: number): Promise<LoadDetail> => metrics.detail(pid);
+export const procDetail = (id: string, pid: number): Promise<LoadDetail> => metrics.detail(id, pid);

@@ -1326,6 +1326,17 @@ export interface MetricsState {
   system: SystemState | null;
   /** Keyed by session id. A session with no pid is simply absent. */
   load: Record<string, LoadSample>;
+  /** Where the rest of the CPU goes: the busiest programs no session claims. */
+  elsewhere: CpuOwner[];
+}
+
+/** A program outside every session, with all it has started. */
+export interface CpuOwner {
+  name: string;
+  pid: number;
+  /** Percent of one core, like `LoadSample.cpuPct`. */
+  cpuPct: number;
+  procs: number;
 }
 
 // ------------------------------------------------------------- worktrees

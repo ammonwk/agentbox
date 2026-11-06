@@ -1599,6 +1599,15 @@ textarea,
   width: 96px;
   flex: none;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Session titles: as wide as two blocks, so a row names what it is. */
+.sysblock.wide {
+  grid-column: span 2;
+}
+.sysblock.wide .sysline > .muted {
+  width: 240px;
 }
 .sysline .grow {
   flex: 1;

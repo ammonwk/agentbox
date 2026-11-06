@@ -1540,7 +1540,7 @@ const router = new Router(mapError)
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {
     const s = fleet.get(params.id!);
     if (!s.pid) throw new HttpError(409, "session has no running process");
-    return json(await procDetail(s.pid));
+    return json(await procDetail(s.id, s.pid));
   })
   // What it waits on: shells, monitors and in-process agents (src/core/work.ts).
   .add("GET", "/api/sessions/:id/work", async ({ params }) => json(await sessionWork(fleet.get(params.id!))))

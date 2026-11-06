@@ -885,7 +885,11 @@ function metrics(): MetricsState {
       procs: busy ? 6 + (s.id.charCodeAt(1) % 5) : 3,
     };
   }
-  return { at: Date.now(), system: sys, load };
+  const elsewhere = [
+    { name: "chrome", pid: 4000, cpuPct: 62, procs: 31 },
+    { name: "agentbox server", pid: 4001, cpuPct: 18, procs: 1 },
+  ];
+  return { at: Date.now(), system: sys, load, elsewhere };
 }
 
 // ------------------------------------------------------------- timelines
