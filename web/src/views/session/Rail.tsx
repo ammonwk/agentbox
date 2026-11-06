@@ -886,7 +886,7 @@ function RowLoad({ id, folded }: { id: string; folded: boolean }) {
   // A session with no process has no figures to show, and no column to hold
   // their place: the name takes the width.
   if (!load) return null;
-  const cpu = load.cpuPct < 1 ? "0%" : `${Math.round(load.cpuPct)}%`;
+  const cpu = load.cpuPct < 0.5 ? "0%" : `${Math.round(load.cpuPct)}%`;
   const gb = load.memBytes / 2 ** 30;
   const mem = gb >= 1 ? `${gb.toFixed(1)}G` : `${Math.round(load.memBytes / 2 ** 20)}M`;
   const hidden = rolled?.hidden ?? 0;
@@ -895,9 +895,9 @@ function RowLoad({ id, folded }: { id: string; folded: boolean }) {
   return (
     <span
       className="rail-load"
-      data-hot={load.cpuPct >= 80 || undefined}
+      data-hot={load.cpuPct >= 25 || undefined}
       data-rollup={hidden ? true : undefined}
-      title={`CPU ${cpu} (100% is one core) · memory ${fmtBytes(load.memBytes)}${kind} · ${load.procs} process${load.procs === 1 ? "" : "es"}${summed}`}
+      title={`CPU ${cpu} (100% is the whole machine) · memory ${fmtBytes(load.memBytes)}${kind} · ${load.procs} process${load.procs === 1 ? "" : "es"}${summed}`}
     >
       <span>{cpu}</span>
       <span>{mem}</span>

@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import { cpus } from "node:os";
 import * as darwin from "./darwin";
 import type { LoadSample, ProcDetail, ProcRole } from "./types";
 
@@ -66,6 +67,18 @@ export function clockHz(): number {
     /* keep the default */
   }
   return hz;
+}
+
+/**
+ * Every CPU figure agentbox shows is a share of the whole machine, 0-100%:
+ * "this session is a quarter of the box" is the question asked of it, and a
+ * per-core 1,400% scale made every reader do the division. Rates are taken in
+ * ticks and divided by this once, where they are made.
+ */
+let coreCount: number | null = null;
+
+export function machineCores(): number {
+  return (coreCount ??= Math.max(1, cpus().length));
 }
 
 /** Boot time in ms since epoch, so a start tick becomes a wall clock. Lazy: an
@@ -333,7 +346,7 @@ export class LoadMeter {
     let history = prev?.history ?? [];
 
     if (prev && table.at > prev.at) {
-      const elapsedTicks = ((table.at - prev.at) / 1000) * clockHz();
+      const elapsedTicks = ((table.at - prev.at) / 1000) * clockHz() * machineCores();
       // Clamped: a reaped subtree can make the total fall, which is not a
       // negative CPU usage, it is missing information.
       cpuPct = Math.max(0, ((ticks - prev.ticks) / elapsedTicks) * 100);
@@ -416,7 +429,8 @@ async function readRchar(pid: number): Promise<number | undefined> {
   }
 }
 
-/** Above either of these in a sample, a process is doing something. An idle
+/** Above either of these in a sample, a process is doing something (CPU here
+ *  in percent of one core). An idle
  *  agent reads ~150 B/s (event-loop wakeups) and uses no CPU; a streaming
  *  reply reads several KB/s. */
 const ACTIVE_CPU_PCT = 1;
@@ -469,11 +483,12 @@ export class ProcWatch {
       }
       const secs = (table.at - w.at) / 1000;
       if (secs <= 0) return;
-      const cpuPct = Math.max(0, ((r.ownTicks - w.ownTicks) / (secs * clockHz())) * 100);
+      const corePct = Math.max(0, ((r.ownTicks - w.ownTicks) / (secs * clockHz())) * 100);
+      const cpuPct = corePct / machineCores();
       const readBps = rchar !== undefined && w.rchar !== undefined ? Math.max(0, (rchar - w.rchar) / secs) : 0;
       w.cpu = [...w.cpu, cpuPct].slice(-HISTORY);
       w.read = [...w.read, readBps].slice(-HISTORY);
-      if (cpuPct >= ACTIVE_CPU_PCT || readBps >= ACTIVE_READ_BPS) w.activeAt = table.at;
+      if (corePct >= ACTIVE_CPU_PCT || readBps >= ACTIVE_READ_BPS) w.activeAt = table.at;
       w.at = table.at;
       w.ownTicks = r.ownTicks;
       w.rchar = rchar;

@@ -17,17 +17,14 @@ import { fmtDur } from "../../lib/format";
  */
 
 /**
- * CPU as a percentage of ONE core, always — the htop convention.
- *
- * The tempting alternative is to switch to "3.5×" above 100 and stay in percent
- * below it, which makes 96% and 4× look like two different units when they are
- * the same one: 96% is most of a single core, 400% is four of them. A threshold
- * that changes notation is worse than a big number.
+ * CPU as a share of the whole machine, 0-100%, everywhere: "this session is a
+ * quarter of the box" is what the number is read for. Ammon asked for it on
+ * 11-06 over htop's per-core 1,400%, which made every reading a division.
  */
 export function cpuText(pct: number): string {
   if (pct >= 10) return `${Math.round(pct)}%`;
-  if (pct >= 1) return `${pct.toFixed(1)}%`;
-  return pct > 0 ? "<1%" : "—";
+  if (pct >= 0.1) return `${pct.toFixed(1)}%`;
+  return pct > 0 ? "<0.1%" : "—";
 }
 
 const ROLE_LABEL: Record<ProcRole, string> = {
@@ -62,7 +59,7 @@ const REFRESH_MS = 5_000;
 export function LoadPanel({ sessionId }: { sessionId: string }) {
   const { metrics } = useMetrics();
   const load = metrics?.load[sessionId];
-  const cores = navigator.hardwareConcurrency || 8;
+  const cores = metrics?.system?.cores || navigator.hardwareConcurrency || 8;
   const [detail, setDetail] = useState<LoadDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -109,11 +106,10 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
         <Stat
           label="cpu"
           value={load ? cpuText(load.cpuPct) : "—"}
-          // 100% is one core. Spelling out the core count is what stops the
-          // headline number from being read as a share of the machine.
-          note={load ? `${(load.cpuPct / 100).toFixed(1)} of ${cores} cores` : "of one core"}
+          // 100% is the whole machine; the cores it amounts to are beside it.
+          note={load ? `of the machine · ${((load.cpuPct * cores) / 100).toFixed(1)} of ${cores} cores` : "of the machine"}
         >
-          <CpuSpark history={history} />
+          <CpuSpark history={history} cores={cores} />
         </Stat>
         <Stat
           label="memory"
@@ -185,10 +181,10 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
                 <td className="num faint">{p.ageMs > 0 ? fmtDur(p.ageMs) : "—"}</td>
                 <td className="num">{fmtDur(p.cpuMs)}</td>
                 <td>
-                  <Activity p={p} />
+                  <Activity p={p} cores={cores} />
                 </td>
                 <td className="num">
-                  <span data-hot={p.cpuPct >= 80}>{cpuText(p.cpuPct)}</span>
+                  <span data-hot={p.cpuPct * cores >= 80}>{cpuText(p.cpuPct)}</span>
                 </td>
                 <td className="num">
                   <Quiet p={p} />
@@ -240,10 +236,11 @@ function rate(bps: number): string {
 }
 
 /** The whole subtree's CPU over the last five minutes, under the headline. */
-function CpuSpark({ history }: { history: number[] }) {
+function CpuSpark({ history, cores }: { history: number[]; cores: number }) {
   if (history.length < 2) return null;
   const h = history.slice(-SLOTS);
-  const top = Math.max(100, ...h);
+  // Scaled to one core at the least, so a quiet session reads flat.
+  const top = Math.max(100 / cores, ...h);
   const x = (i: number) => ((SLOTS - h.length + i) / (SLOTS - 1)) * 100;
   const y = (v: number) => 22 - (v / top) * 20;
   const line = h.map((v, i) => `${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
@@ -269,7 +266,7 @@ function CpuSpark({ history }: { history: number[] }) {
  * The track only spans what has been watched: blank to its left is time
  * before anyone looked.
  */
-function Activity({ p }: { p: ProcDetail }) {
+function Activity({ p, cores }: { p: ProcDetail; cores: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const n = Math.min(SLOTS, p.cpuHistory.length);
   if (n === 0) return <span className="faint">—</span>;
@@ -278,7 +275,8 @@ function Activity({ p }: { p: ProcDetail }) {
   const off = SLOTS - n;
   // Intensity rather than height: at a 1px column, whether it did anything is
   // the reading, and how much is a detail the tooltip gives exactly.
-  const cpuInk = (v: number) => (v < ACTIVE_CPU ? 0 : 0.3 + 0.7 * Math.min(1, v / 100));
+  // Ink in cores: a process holding one whole core is full ink.
+  const cpuInk = (v: number) => (v * cores < ACTIVE_CPU ? 0 : 0.3 + 0.7 * Math.min(1, (v * cores) / 100));
   const readInk = (v: number) =>
     v < ACTIVE_READ ? 0 : 0.3 + 0.7 * Math.min(1, Math.log10(v / ACTIVE_READ) / Math.log10(512));
   const at = hover === null ? null : hover - off;

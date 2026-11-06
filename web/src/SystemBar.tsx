@@ -104,7 +104,7 @@ export function SystemBar({
         <span
           className="sys-cell"
           title={
-            `${sys.cores} cores, each bar one core; ${sys.cores * 100}% is all of them.\n` +
+            `${sys.cores} cores, each bar one core. Busiest, as a share of the machine:\n` +
             owners.slice(0, 8).map((o) => `${o.cpuPct}%  ${o.name}`).join("\n")
           }
         >
@@ -417,18 +417,17 @@ function Div() {
 
 /** The expanded sheet: everything the one-line bar had to leave out. */
 function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: Owner[]; limits: AccountView[]; now: number }) {
-  const total = sys.cores * 100;
   const named = owners.reduce((a, o) => a + o.cpuPct, 0);
-  const busy = Math.round(sys.cpu * total);
+  const busy = Math.round(sys.cpu * 100);
   return (
     <div className="sysdetail">
       <Block title="cpu by owner" wide>
         {owners.slice(0, 10).map((o) => (
-          <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} note={o.note} frac={o.cpuPct / total} />
+          <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} note={o.note} frac={o.cpuPct / 100} />
         ))}
-        {busy > named + 20 ? <Line label="short-lived" value={`${busy - named}%`} frac={(busy - named) / total} /> : null}
+        {busy > named + 2 ? <Line label="short-lived" value={`${busy - named}%`} frac={(busy - named) / 100} /> : null}
         <p className="hint">
-          Percent of one core; all {sys.cores} are {total}%. A session counts everything it started, its
+          Share of the whole machine. A session counts everything it started, its
           shell commands and their test databases included. Load {sys.load1.toFixed(0)} is the threads
           running or waiting for a core{sys.psiCpu !== undefined ? `; something waited ${sys.psiCpu.toFixed(0)}% of the last ten seconds` : ""}.
         </p>
@@ -540,10 +539,10 @@ function cpuOwners(metrics: MetricsState, sessions: readonly Session[]): Owner[]
   const out: Owner[] = [];
   for (const s of sessions) {
     const l = metrics.load[s.id];
-    if (l && l.cpuPct >= 1) out.push({ key: s.id, name: titleOf(s), cpuPct: Math.round(l.cpuPct), note: `${l.procs} procs` });
+    if (l && l.cpuPct >= 0.5) out.push({ key: s.id, name: titleOf(s), cpuPct: Math.round(l.cpuPct), note: `${l.procs} procs` });
   }
   for (const o of metrics.elsewhere ?? []) {
-    if (o.cpuPct >= 1) out.push({ key: `p${o.pid}`, name: o.name, cpuPct: o.cpuPct, note: `outside · ${o.procs}` });
+    if (o.cpuPct >= 0.5) out.push({ key: `p${o.pid}`, name: o.name, cpuPct: Math.round(o.cpuPct), note: `outside · ${o.procs}` });
   }
   return out.sort((a, b) => b.cpuPct - a.cpuPct);
 }

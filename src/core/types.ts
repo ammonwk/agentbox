@@ -1262,7 +1262,7 @@ export interface SystemState {
 
 /** How much of the machine one session's process subtree is holding. */
 export interface LoadSample {
-  /** Percent of ONE core, htop-style: 400% is four cores, not an error. */
+  /** Percent of the whole machine, 0-100: 25% is a quarter of every core. */
   cpuPct: number;
   memBytes: number;
   /**
@@ -1288,7 +1288,7 @@ export interface ProcDetail {
   /** The kernel's scheduler state letter: R running, S sleeping, D waiting on
    *  disk, Z exited but not reaped, T stopped. Empty where unknown. */
   state: string;
-  /** Percent of one core, over the last metrics sample. */
+  /** Percent of the whole machine, over the last metrics sample. */
   cpuPct: number;
   /** CPU time it has used itself since it started. Against `ageMs`, the
    *  difference between waiting and working. */
@@ -1334,7 +1334,7 @@ export interface MetricsState {
 export interface CpuOwner {
   name: string;
   pid: number;
-  /** Percent of one core, like `LoadSample.cpuPct`. */
+  /** Percent of the whole machine, like `LoadSample.cpuPct`. */
   cpuPct: number;
   procs: number;
 }

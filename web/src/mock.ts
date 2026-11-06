@@ -873,8 +873,8 @@ function metrics(): MetricsState {
   for (const s of sessions) {
     if (s.host === "none") continue;
     const busy = s.status === "running";
-    const h = loadHist.get(s.id) ?? Array.from({ length: 20 }, () => (busy ? Math.random() * 120 : Math.random() * 4));
-    const next = busy ? Math.max(0, walk(h[h.length - 1], 0, 380, 120)) : Math.random() * 3;
+    const h = loadHist.get(s.id) ?? Array.from({ length: 20 }, () => (busy ? Math.random() * 10 : Math.random() * 0.3));
+    const next = busy ? Math.max(0, walk(h[h.length - 1], 0, 30, 10)) : Math.random() * 0.3;
     h.push(next);
     while (h.length > 24) h.shift();
     loadHist.set(s.id, h);
@@ -886,8 +886,8 @@ function metrics(): MetricsState {
     };
   }
   const elsewhere = [
-    { name: "chrome", pid: 4000, cpuPct: 62, procs: 31 },
-    { name: "agentbox server", pid: 4001, cpuPct: 18, procs: 1 },
+    { name: "chrome", pid: 4000, cpuPct: 4.4, procs: 31 },
+    { name: "agentbox server", pid: 4001, cpuPct: 1.3, procs: 1 },
   ];
   return { at: Date.now(), system: sys, load, elsewhere };
 }

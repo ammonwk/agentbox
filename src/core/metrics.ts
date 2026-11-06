@@ -8,6 +8,7 @@ import {
   argvOf,
   clockHz,
   describe,
+  machineCores,
   readProcTable,
   sessionRows,
   sessionTags,
@@ -174,7 +175,7 @@ class Metrics {
       if (claimed.has(r.pid)) continue;
       const was = prev.byPid.get(r.pid);
       if (!was || was.startTicks !== r.startTicks) continue;
-      const pct = ((r.ownTicks - was.ownTicks) / (secs * clockHz())) * 100;
+      const pct = ((r.ownTicks - was.ownTicks) / (secs * clockHz() * machineCores())) * 100;
       if (pct <= 0) continue;
       const key = r.ppid === 2 || r.pid === 2 ? "kernel" : this.unitOf(r);
       const g = groups.get(key);
@@ -188,7 +189,7 @@ class Metrics {
     return [...groups]
       .sort((a, b) => b[1].cpuPct - a[1].cpuPct)
       .slice(0, 12)
-      .map(([key, g]) => ({ name: this.nameOf(key, g.top), pid: g.top.pid, cpuPct: Math.round(g.cpuPct), procs: g.procs }));
+      .map(([key, g]) => ({ name: this.nameOf(key, g.top), pid: g.top.pid, cpuPct: g.cpuPct, procs: g.procs }));
   }
 
   /** The unit a process runs in, read once per process. */
