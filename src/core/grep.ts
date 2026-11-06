@@ -8,6 +8,7 @@
  * the fleet's alone, which exist only while a transcript can move.
  */
 
+import { existsSync } from "node:fs";
 import { adapterFor } from "./providers";
 import { transcriptFile, type TranscriptRef } from "./providers/types";
 import { openReader } from "./readercache";
@@ -48,6 +49,8 @@ function slices<T>(items: readonly T[], n: number): T[][] {
 
 /** How many files the readers parse once ripgrep has narrowed the board. */
 const NARROWED_FILES = 64;
+/** Files per ripgrep run, so the board's size never nears the kernel's argument limit. */
+const RG_BATCH = 1000;
 
 /** Let ripgrep find the transcript files that can match before the readers
  *  parse them. `-l` stops at the first match in each file, so this is a byte
@@ -58,25 +61,29 @@ const NARROWED_FILES = 64;
 async function narrow(job: GrepJob, signal: AbortSignal): Promise<GrepJob["sessions"] | null> {
   const rg = Bun.which("rg");
   if (!rg || /\(\?|\\[1-9]|\\k<|"/.test(job.pattern)) return null;
-  const paths = [...new Set(job.sessions.map(({ ref }) => transcriptFile(ref.path)))];
-  if (paths.length === 0 || paths.length > 2000) return null;
+  // A deleted transcript makes ripgrep exit 2, which reads as a failed prefilter.
+  const paths = [...new Set(job.sessions.map(({ ref }) => transcriptFile(ref.path)))].filter((p) => existsSync(p));
+  if (paths.length === 0) return [];
   const threads = Math.min(8, globalThis.navigator?.hardwareConcurrency ?? 8);
-  const proc = Bun.spawn(
-    [rg, "--files-with-matches", "--null", "--no-ignore", "--text", "--threads", String(threads), ...(job.flags.includes("i") ? ["-i"] : []), "-e", job.pattern, ...paths],
-    { stdout: "pipe", stderr: "ignore" },
-  );
-  const abort = () => proc.kill();
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    const out = await new Response(proc.stdout).arrayBuffer();
-    const code = await proc.exited;
-    if (signal.aborted) throw new Error("grep: the client went away");
-    if (code !== 0 && code !== 1) return null; // ripgrep failed: scan everything
-    const found = new Set(new TextDecoder().decode(out).split("\0").filter(Boolean));
-    return job.sessions.filter(({ ref }) => found.has(transcriptFile(ref.path))).slice(0, NARROWED_FILES);
-  } finally {
-    signal.removeEventListener("abort", abort);
+  const found = new Set<string>();
+  for (let at = 0; at < paths.length; at += RG_BATCH) {
+    const proc = Bun.spawn(
+      [rg, "--files-with-matches", "--null", "--no-ignore", "--text", "--threads", String(threads), ...(job.flags.includes("i") ? ["-i"] : []), "-e", job.pattern, ...paths.slice(at, at + RG_BATCH)],
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const abort = () => proc.kill();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const out = await new Response(proc.stdout).arrayBuffer();
+      const code = await proc.exited;
+      if (signal.aborted) throw new Error("grep: the client went away");
+      if (code !== 0 && code !== 1) return null; // ripgrep failed: scan everything
+      for (const file of new TextDecoder().decode(out).split("\0")) if (file) found.add(file);
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
   }
+  return job.sessions.filter(({ ref }) => found.has(transcriptFile(ref.path))).slice(0, NARROWED_FILES);
 }
 
 export async function grepTimelines(job: GrepJob): Promise<GrepHit[]> {

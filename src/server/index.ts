@@ -2219,8 +2219,10 @@ function listenOnSocket(
       unix: sock,
       websocket,
       fetch: (req, srv) => handle(req, srv),
-      // Bun's types omit it for a socket, but it applies: the 10s default cuts the CLI's long polls.
-      ...({ idleTimeout: 60 } as object),
+      // None: the 10s default cuts the CLI's long polls, and Bun ignores a
+      // request's `timeout(req, 0)` on a socket, so any limit cut a long grep.
+      // A CLI's connection ends with its process.
+      ...({ idleTimeout: 0 } as object),
     });
   } catch (err) {
     console.error(`agentbox: not listening on ${sock}: ${(err as Error).message}`);
