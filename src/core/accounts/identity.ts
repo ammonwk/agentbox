@@ -236,7 +236,7 @@ function parseDevinAuthStatus(text: string): { loggedIn: boolean; email: string 
 }
 
 async function identifyDevin(account: AccountRef, execFn: ExecFn = defaultExec): Promise<Identity> {
-  if (!existsSync(credentialsPath("devin", account.home)!)) {
+  if (!existsSync(credentialsPath("devin", account.home))) {
     return { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not logged in" } };
   }
   const { env, unset } = authEnv({ ...account, provider: "devin" });
@@ -261,7 +261,7 @@ export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?:
   const now = opts.now ?? Date.now();
   switch (account.provider) {
     case "muse": {
-      const meta = rec(rec(rec(readJson(credentialsPath("muse", account.home)!))?.providers)?.meta);
+      const meta = rec(rec(rec(readJson(credentialsPath("muse", account.home)))?.providers)?.meta);
       const loggedIn = !!meta && (!!str(meta.api_key) || !!str(meta.access_token) || (account.isDefault && meta.storage === "keychain"));
       return {
         email: loggedIn ? str(meta?.user_email) : null,

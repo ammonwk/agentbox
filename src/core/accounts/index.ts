@@ -215,7 +215,7 @@ export class AccountsService extends EventEmitter {
   login(accountId: string): LoginFlow {
     const a = getAccount(accountId);
     if (!a) throw new AccountError(404, `no account ${accountId}`);
-    if (a.provider !== "omp") resyncShared(a);
+    resyncShared(a);
     return this.logins.start(a);
   }
 

@@ -64,7 +64,7 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
   const common = {
     env: { BROWSER: "true", NO_COLOR: "1", ...env },
     unset,
-    credentialFile: credentialsPath(account.provider, account.home)!,
+    credentialFile: credentialsPath(account.provider, account.home),
   };
   switch (account.provider) {
     case "muse":

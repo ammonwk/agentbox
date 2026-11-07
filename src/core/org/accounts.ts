@@ -87,7 +87,7 @@ function writeJson(path: string, value: unknown): void {
 }
 
 /** The file a home keeps its login in. */
-const fileOf = (a: Pick<Account, "provider" | "home">): string => credentialsPath(a.provider, a.home)!;
+const fileOf = (a: Pick<Account, "provider" | "home">): string => credentialsPath(a.provider, a.home);
 
 /** How one provider's login is read, refreshed and written, the same for
  *  every home of it. */
@@ -325,7 +325,7 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
     }
     if (!doc.login) {
       for (const h of homes) {
-        const path = credentialsPath(h.provider, h.home)!;
+        const path = credentialsPath(h.provider, h.home);
         if (!existsSync(path)) continue;
         rmSync(path);
         changed = true;
@@ -341,7 +341,7 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
   for (const a of listAccounts()) {
     if (!isOrgAccount(a) || mirrors.has(a.id)) continue;
     deleteAccount(a.id);
-    rmSync(credentialsPath(a.provider, a.home)!, { force: true });
+    rmSync(credentialsPath(a.provider, a.home), { force: true });
     changed = true;
   }
   return changed;

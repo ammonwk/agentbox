@@ -75,17 +75,62 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
   return { env: e.env, unset: e.unset ?? [] };
 }
 
-/** The file whose existence means "this home has logged in". For omp, an
- *  OpenCode Go account, its Console sign-in (accounts/gocred.ts). */
-export function credentialsPath(provider: AccountProvider, home: string): string | null {
-  switch (provider) {
-    case "claude": return join(home, ".credentials.json");
-    case "codex": return join(home, "auth.json");
-    case "devin": return join(home, "devin", "credentials.toml");
-    case "omp": return join(home, GO_LOGIN_FILE);
-    case "muse": return join(home, "muse", "auth.json");
-  }
-}
+/** A home of each provider: its `credentials` file, whose existence means
+ *  "this home has logged in" (for omp, its OpenCode Go Console sign-in); the
+ *  `login` it holds, where its email alone does not name it (`loginKey`); and
+ *  `share`, which links it to the default home's configuration and returns
+ *  the names it added. */
+const HOMES: Record<AccountProvider, { credentials: string; login?(a: Pick<Account, "email" | "home">): string | null; share(home: string): string[] }> = {
+  claude: {
+    credentials: ".credentials.json",
+    login(a) {
+      if (!a.email) return null;
+      const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
+      const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
+      return `claude|${a.email.toLowerCase()}|${typeof org === "string" ? org : ""}`;
+    },
+    // `statusline*` is a prefix match: people keep status-line scripts next
+    // to settings.json and reference them by path.
+    share: (home) => [
+      ...linkShared(defaultHome("claude"), home, { names: ["settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks", "output-styles", "keybindings.json"], prefixes: ["statusline"] }),
+      ...linkMemory(defaultHome("claude"), home),
+      ...(syncClaudeJson(home) ? [".claude.json"] : []),
+    ],
+  },
+  codex: {
+    credentials: "auth.json",
+    // hooks.json is codex's equivalent of claude's hooks: without it an
+    // account silently runs without the user's hooks.
+    share: (home) => linkShared(defaultHome("codex"), home, { names: ["config.toml", "AGENTS.md", "skills", "rules", "prompts", "hooks.json"], prefixes: [] }),
+  },
+  devin: {
+    credentials: "devin/credentials.toml",
+    // devin logs in under XDG_DATA_HOME=<home> and XDG_CONFIG_HOME=<home>/config.
+    // Its data dir must exist for the credentials to land; its config dir gets
+    // the user's config.json so login sees the same settings.
+    share(home) {
+      for (const d of ["devin", "config/devin"]) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
+      return linkShared(join(xdgConfigHome(), "devin"), join(home, "config/devin"), { names: ["config.json"], prefixes: [] });
+    },
+  },
+  omp: {
+    credentials: GO_LOGIN_FILE,
+    login(a) {
+      const g = readGoLogin(a.home);
+      return g?.accountID ? `omp|${g.accountID}|${g.orgID ?? ""}` : null;
+    },
+    share: () => [],
+  },
+  muse: {
+    credentials: "muse/auth.json",
+    share(home) {
+      mkdirSync(join(home, "muse"), { recursive: true, mode: 0o700 });
+      return linkShared(join(defaultHome("muse"), "muse"), join(home, "muse"), { names: ["settings.json", "skills", "AGENTS.md"], prefixes: [] });
+    },
+  },
+};
+
+export const credentialsPath = (provider: AccountProvider, home: string): string => join(home, HOMES[provider].credentials);
 
 /**
  * Claude's global state file. With `CLAUDE_CONFIG_DIR` set it lives inside the
@@ -151,16 +196,8 @@ export function sameLogin(a: Pick<Account, "provider" | "email" | "home">, b: Pi
 /** The login a home holds, as a string two homes share exactly when `sameLogin`
  *  says they do; null when it holds none we can name. */
 function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
-  if (a.provider === "omp") {
-    const g = readGoLogin(a.home);
-    return g?.accountID ? `omp|${g.accountID}|${g.orgID ?? ""}` : null;
-  }
-  if (a.provider === "claude" && a.email) {
-    const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
-    const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
-    return `claude|${a.email.toLowerCase()}|${typeof org === "string" ? org : ""}`;
-  }
-  return a.email ? `${a.provider}|${a.email.toLowerCase()}` : null;
+  const login = HOMES[a.provider].login;
+  return login ? login(a) : a.email ? `${a.provider}|${a.email.toLowerCase()}` : null;
 }
 
 /**
@@ -263,19 +300,6 @@ function expandHome(p: string): string {
 }
 
 // --------------------------------------------------------- shared config
-
-/** What each provider shares from its default home. `statusline*` is a prefix
- *  match: people keep status-line scripts next to settings.json and reference
- *  them by path. */
-const SHARED: Record<Exclude<AccountProvider, "omp" | "devin" | "muse">, { names: string[]; prefixes: string[] }> = {
-  claude: {
-    names: ["settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks", "output-styles", "keybindings.json"],
-    prefixes: ["statusline"],
-  },
-  // hooks.json is codex's equivalent of claude's hooks: without it an account
-  // silently runs without the user's hooks.
-  codex: { names: ["config.toml", "AGENTS.md", "skills", "rules", "prompts", "hooks.json"], prefixes: [] },
-};
 
 /**
  * Keys of `~/.claude.json` a new account inherits. An allowlist, not a
@@ -521,29 +545,7 @@ export function createAccountHome(provider: AccountProvider, id: string): string
  * existed in the default home. Returns the names it added.
  */
 export function resyncShared(account: Pick<Account, "provider" | "home" | "isDefault">): string[] {
-  if (account.isDefault || account.provider === "omp") return [];
-  const { provider, home } = account;
-  const made: string[] = [];
-  if (provider === "claude" || provider === "codex") {
-    made.push(...linkShared(defaultHome(provider), home, SHARED[provider]));
-    if (provider === "claude") {
-      made.push(...linkMemory(defaultHome(provider), home));
-      if (syncClaudeJson(home)) made.push(".claude.json");
-    }
-  } else if (provider === "muse") {
-    const cfgDir = join(home, "muse");
-    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
-    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names: ["settings.json", "skills", "AGENTS.md"], prefixes: [] }));
-  } else if (provider === "devin") {
-    // devin logs in under XDG_DATA_HOME=<home> and XDG_CONFIG_HOME=<home>/config.
-    // Its data dir must exist for the credentials to land; its config dir gets
-    // the user's config.json so login sees the same settings.
-    mkdirSync(join(home, "devin"), { recursive: true, mode: 0o700 });
-    const cfgDir = join(home, "config", "devin");
-    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
-    made.push(...linkShared(join(xdgConfigHome(), "devin"), cfgDir, { names: ["config.json"], prefixes: [] }));
-  }
-  return made;
+  return account.isDefault ? [] : HOMES[account.provider].share(account.home);
 }
 
 // ---------------------------------------------------------------- import
@@ -567,10 +569,7 @@ export async function importHome(
 ): Promise<{ account: Account; email: string | null }> {
   const home = canonical(expandHome(path.trim()));
   if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
-  const cred = credentialsPath(provider, home)!;
-  if (!existsSync(cred)) {
-    throw new AccountError(400, `${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
-  }
+  if (!existsSync(credentialsPath(provider, home))) throw new AccountError(400, `${home} has no ${provider} login (expected ${HOMES[provider].credentials})`);
 
   // omp has no CLI home of its own to adopt: what is imported is another
   // agentbox account home (a copy, a backup), whose Console sign-in is the login.
