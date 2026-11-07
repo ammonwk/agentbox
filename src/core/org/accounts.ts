@@ -86,100 +86,162 @@ function writeJson(path: string, value: unknown): void {
   renameSync(tmp, path);
 }
 
-/** The login a home holds, with its real refresh token; null when it holds none. */
-function loginIn(a: Pick<Account, "provider" | "home" | "isDefault">): Login | null {
-  if (a.provider === "claude") {
-    const o = readJson(join(a.home, ".credentials.json"))?.claudeAiOauth as Record<string, unknown> | undefined;
-    if (!o || typeof o.refreshToken !== "string" || !o.refreshToken || o.refreshToken === POOLED) return null;
-    const oa = readJson(claudeJsonPath(a))?.oauthAccount;
-    return { claudeAiOauth: o, oauthAccount: oa && typeof oa === "object" ? (oa as Record<string, unknown>) : null };
-  }
-  if (a.provider === "codex") {
-    const auth = readJson(join(a.home, "auth.json"));
-    const t = auth?.tokens as Record<string, unknown> | undefined;
-    if (!auth || !t || typeof t.refresh_token !== "string" || !t.refresh_token || t.refresh_token === POOLED) return null;
-    return auth as CodexLogin;
-  }
-  if (a.provider === "omp") {
-    const login = readGoLogin(a.home);
-    return login && login.refresh !== POOLED ? login : null;
-  }
-  if (a.provider === "devin") {
-    // WINDSURF_API_KEY: a static key, so a copy is not a second refresher.
-    const text = readText(join(a.home, "devin", "credentials.toml"));
-    return text && /^\s*windsurf_api_key\s*=\s*["'][^"']+["']/m.test(text) ? { text } : null;
-  }
-  if (a.provider === "muse") {
-    // Only a static api_key: an access token may rotate, and the default
-    // home's login lives in the Keychain, which has no file to read.
-    const text = readText(join(a.home, "muse", "auth.json"));
-    const meta = text ? rec(rec(readJson(join(a.home, "muse", "auth.json"))?.providers)?.meta) : null;
-    return text && typeof meta?.api_key === "string" && meta.api_key ? { text } : null;
-  }
-  return null;
-}
+/** The file a home keeps its login in. */
+const fileOf = (a: Pick<Account, "provider" | "home">): string => credentialsPath(a.provider, a.home)!;
 
-/** When a login's access token runs out, NaN when it does not say. */
-function expiryOf(provider: AccountProvider, login: Login): number {
-  if (provider === "claude") return Number((login as ClaudeLogin).claudeAiOauth.expiresAt);
-  if (provider === "omp") return (login as GoLogin).expires;
-  if (provider === "devin" || provider === "muse") return NaN;
-  const t = (login as CodexLogin).tokens;
-  return typeof t.access_token === "string" ? Number(decodeJwtPayload(t.access_token)?.exp) * 1000 : NaN;
-}
-
-/** When the store should refresh a login: an hour before claude's access
- *  token runs out (they last about eight), a day before codex's (about ten
- *  days), and codex's at least every five days, inside the CLI's own reach.
- *  devin's key and muse's api_key do not rotate, so neither is ever refreshed. */
-function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date | null, now: number): boolean {
-  if (provider === "devin" || provider === "muse") return false;
-  const exp = expiryOf(provider, login);
-  if (!Number.isFinite(exp)) return true;
-  if (provider === "claude") return exp - now < 60 * 60_000;
-  if (provider === "omp") return exp - now < REFRESH_AHEAD_MS;
-  return exp - now < 24 * 3_600_000 || !refreshedAt || now - refreshedAt.getTime() > 5 * 86_400_000;
-}
-
-/** The file a member's home holds for a login: everything but the refresh
- *  token. Its expiry stays: it is when the login ends, refreshed or not. */
-function homeFile(provider: AccountProvider, login: Login): Record<string, unknown> {
-  if (provider === "claude") return { claudeAiOauth: { ...(login as ClaudeLogin).claudeAiOauth, refreshToken: POOLED } };
-  if (provider === "omp") return { ...(login as GoLogin), refresh: POOLED };
-  if (provider === "devin" || provider === "muse") return login as StaticLogin;
-  const l = login as CodexLogin;
-  return { ...l, tokens: { ...l.tokens, refresh_token: POOLED } };
+/** How one provider's login is read, refreshed and written, the same for
+ *  every home of it. */
+interface Kind<L extends Login = Login> {
+  /** The login a home holds, with its real refresh token; null when it holds none. */
+  read(a: Pick<Account, "provider" | "home" | "isDefault">): L | null;
+  /** When its access token runs out, NaN when it does not say. */
+  expiry(l: L): number;
+  /** The login with its refresh token held back: what a member's home gets.
+   *  Its expiry stays: it is when the login ends, refreshed or not. */
+  pooled(l: L): L;
+  /** Puts a login in a home, unless the home already holds it. */
+  write(a: Account, l: L): void;
+  /** Refreshed `ahead` ms before it runs out, and at least `every` ms; a
+   *  login without it does not rotate and is never refreshed. */
+  refresh?: { ahead: number; every?: number; run(l: L, now: number): Promise<{ login: L } | { refused: string } | { retry: string }> };
+  /** The login's own id, where the email does not name it. */
+  id?(home: string): string | null;
+  /** Why a home whose login `read` does not take cannot be shared. */
+  unshareable?: string;
+  /** On macOS the login is in the Keychain, which agentbox cannot share yet. */
+  keychain?: true;
 }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
+/** A refresh token exchanged at an OAuth endpoint: the provider's reply, or
+ *  why it was refused for good (`refused`: log in again), or a failure worth
+ *  retrying. */
+async function exchange(url: string, body: Record<string, unknown>): Promise<{ r: Record<string, unknown> } | { refused: string } | { retry: string }> {
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+  } catch (e) {
+    return { retry: (e as Error).message };
+  }
+  const text = await res.text();
+  if (res.status === 400 || res.status === 401 || res.status === 403) return { refused: `${res.status} ${text.slice(0, 200)}` };
+  if (!res.ok) return { retry: `${res.status} ${text.slice(0, 200)}` };
+  return { r: JSON.parse(text) as Record<string, unknown> };
+}
+
+/** devin's WINDSURF_API_KEY and muse's api_key: static, so a copy is not a
+ *  second refresher, and the store keeps the file's text as it is. */
+const staticKind = (valid: (text: string, a: Pick<Account, "home">) => boolean, more?: Partial<Kind<StaticLogin>>): Kind<StaticLogin> => ({
+  read(a) {
+    const text = readText(fileOf(a));
+    return text && valid(text, a) ? { text } : null;
+  },
+  expiry: () => NaN,
+  pooled: (l) => l,
+  write(a, l) {
+    if (readText(fileOf(a)) !== l.text) writeText(fileOf(a), l.text);
+  },
+  ...more,
+});
+
+const KINDS: Record<AccountProvider, Kind> = {
+  claude: {
+    read(a): ClaudeLogin | null {
+      const o = readJson(fileOf(a))?.claudeAiOauth as Record<string, unknown> | undefined;
+      if (!o || typeof o.refreshToken !== "string" || !o.refreshToken || o.refreshToken === POOLED) return null;
+      const oa = readJson(claudeJsonPath(a))?.oauthAccount;
+      return { claudeAiOauth: o, oauthAccount: oa && typeof oa === "object" ? (oa as Record<string, unknown>) : null };
+    },
+    expiry: (l: ClaudeLogin) => Number(l.claudeAiOauth.expiresAt),
+    pooled: (l: ClaudeLogin) => ({ ...l, claudeAiOauth: { ...l.claudeAiOauth, refreshToken: POOLED } }),
+    write(a, l: ClaudeLogin) {
+      if (!same(readJson(fileOf(a)), { claudeAiOauth: l.claudeAiOauth })) writeJson(fileOf(a), { claudeAiOauth: l.claudeAiOauth });
+      const cj = readJson(claudeJsonPath(a)) ?? {};
+      if (l.oauthAccount && !same(cj.oauthAccount, l.oauthAccount)) writeJson(claudeJsonPath(a), { ...cj, oauthAccount: l.oauthAccount });
+    },
+    // Access tokens last about eight hours.
+    refresh: {
+      ahead: 60 * 60_000,
+      async run(l: ClaudeLogin, now) {
+        const old = l.claudeAiOauth;
+        const scope = (old.scopes as string[] | undefined)?.join(" ") ?? "user:inference user:profile";
+        const x = await exchange(CLAUDE_TOKEN_URL, { grant_type: "refresh_token", refresh_token: old.refreshToken, client_id: CLAUDE_CLIENT_ID, scope });
+        if (!("r" in x)) return x;
+        const { r } = x;
+        const o: Record<string, unknown> = { ...old, accessToken: r.access_token, refreshToken: r.refresh_token ?? old.refreshToken, expiresAt: now + Number(r.expires_in) * 1000 };
+        if (typeof r.refresh_token_expires_in === "number") o.refreshTokenExpiresAt = now + r.refresh_token_expires_in * 1000;
+        return { login: { ...l, claudeAiOauth: o } };
+      },
+    },
+    keychain: true,
+  },
+  codex: {
+    read(a): CodexLogin | null {
+      const auth = readJson(fileOf(a));
+      const t = auth?.tokens as Record<string, unknown> | undefined;
+      if (!auth || !t || typeof t.refresh_token !== "string" || !t.refresh_token || t.refresh_token === POOLED) return null;
+      return auth as CodexLogin;
+    },
+    expiry: (l: CodexLogin) => (typeof l.tokens.access_token === "string" ? Number(decodeJwtPayload(l.tokens.access_token)?.exp) * 1000 : NaN),
+    pooled: (l: CodexLogin) => ({ ...l, tokens: { ...l.tokens, refresh_token: POOLED } }),
+    write(a, l) {
+      if (!same(readJson(fileOf(a)), l)) writeJson(fileOf(a), l);
+    },
+    // Access tokens last about ten days; every five days stays inside the CLI's own reach.
+    refresh: {
+      ahead: 24 * 3_600_000,
+      every: 5 * 86_400_000,
+      async run(l: CodexLogin, now) {
+        const x = await exchange(CODEX_TOKEN_URL, { grant_type: "refresh_token", refresh_token: l.tokens.refresh_token, client_id: CODEX_CLIENT_ID, scope: "openid profile email" });
+        if (!("r" in x)) return x;
+        const { r } = x;
+        const tokens = { ...l.tokens, ...(r.id_token ? { id_token: r.id_token } : {}), ...(r.access_token ? { access_token: r.access_token } : {}), ...(r.refresh_token ? { refresh_token: r.refresh_token } : {}) };
+        return { login: { ...l, tokens, last_refresh: new Date(now).toISOString() } };
+      },
+    },
+  },
+  omp: {
+    read(a) {
+      const login = readGoLogin(a.home);
+      return login && login.refresh !== POOLED ? login : null;
+    },
+    expiry: (l: GoLogin) => l.expires,
+    pooled: (l: GoLogin) => ({ ...l, refresh: POOLED }),
+    write(a, l: GoLogin) {
+      const cur = readGoLogin(a.home);
+      // Only what the store moves on: rewriting a file per pass would be churn.
+      if (!cur || cur.refresh !== l.refresh || cur.access !== l.access || cur.expires !== l.expires || cur.orgID !== l.orgID) writeGoLogin(a.home, l);
+    },
+    refresh: { ahead: REFRESH_AHEAD_MS, run: (l: GoLogin, now) => exchangeGoRefresh(l, fetch, now) },
+    // An email can hold several OpenCode accounts, each its own sign-in.
+    id(home) {
+      const l = readGoLogin(home);
+      return l?.accountID ? `${l.accountID}:${l.orgID ?? ""}` : null;
+    },
+  },
+  devin: staticKind((text) => /^\s*windsurf_api_key\s*=\s*["'][^"']+["']/m.test(text)),
+  // Only a static api_key: an access token may rotate, and the default home's
+  // login lives in the Keychain, which has no file to read.
+  muse: staticKind((_text, a) => {
+    const meta = rec(rec(readJson(join(a.home, "muse", "auth.json"))?.providers)?.meta);
+    return typeof meta?.api_key === "string" && !!meta.api_key;
+  }, { unshareable: "can be shared only with a static api_key login: its token login (or the Keychain) rotates and would log every sharer out" }),
+};
+
+/** Whether the store should refresh a login now. */
+function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date | null, now: number): boolean {
+  const { refresh, expiry } = KINDS[provider];
+  if (!refresh) return false;
+  const exp = expiry(login);
+  if (!Number.isFinite(exp)) return true;
+  return exp - now < refresh.ahead || (!!refresh.every && (!refreshedAt || now - refreshedAt.getTime() > refresh.every));
+}
+
 /** Keep a home's file equal to the store's login. A CLI that failed a
  *  refresh blanks its file ("Login expired"); this puts the login back, and
  *  its next prompt goes through. */
-function writeHome(a: Account, login: Login): void {
-  if (a.provider === "omp") {
-    const want = homeFile("omp", login) as unknown as GoLogin;
-    const cur = readGoLogin(a.home);
-    // Only what the store moves on: rewriting a file per pass would be churn.
-    if (!cur || cur.refresh !== POOLED || cur.access !== want.access || cur.expires !== want.expires || cur.orgID !== want.orgID) writeGoLogin(a.home, want);
-    return;
-  }
-  if (a.provider === "devin" || a.provider === "muse") {
-    const path = credentialsPath(a.provider, a.home)!;
-    const text = (login as StaticLogin).text;
-    if (readText(path) !== text) writeText(path, text);
-    return;
-  }
-  const path = credentialsPath(a.provider, a.home)!;
-  const want = homeFile(a.provider, login);
-  if (!same(readJson(path), want)) writeJson(path, want);
-  if (a.provider === "claude") {
-    const oa = (login as ClaudeLogin).oauthAccount;
-    const path = claudeJsonPath(a);
-    const cj = readJson(path) ?? {};
-    if (oa && !same(cj.oauthAccount, oa)) writeJson(path, { ...cj, oauthAccount: oa });
-  }
-}
+const writeHome = (a: Account, login: Login): void => KINDS[a.provider].write(a, KINDS[a.provider].pooled(login));
 
 // --------------------------------------------------------------- refreshing
 
@@ -188,75 +250,24 @@ const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/** The provider's answer to a refresh: the new login, or why it was refused
- *  for good (`refused`: log in again), or a failure worth retrying. */
-async function refreshLogin(provider: AccountProvider, login: Login, now: number): Promise<{ login: Login } | { refused: string } | { retry: string }> {
-  if (provider === "devin" || provider === "muse") return { refused: `${provider}'s login does not refresh` };
-  if (provider === "omp") return exchangeGoRefresh(login as GoLogin, fetch, now);
-  const body =
-    provider === "claude"
-      ? {
-          grant_type: "refresh_token",
-          refresh_token: (login as ClaudeLogin).claudeAiOauth.refreshToken,
-          client_id: CLAUDE_CLIENT_ID,
-          scope: ((login as ClaudeLogin).claudeAiOauth.scopes as string[] | undefined)?.join(" ") ?? "user:inference user:profile",
-        }
-      : { grant_type: "refresh_token", refresh_token: (login as CodexLogin).tokens.refresh_token, client_id: CODEX_CLIENT_ID, scope: "openid profile email" };
-  let res: Response;
-  try {
-    res = await fetch(provider === "claude" ? CLAUDE_TOKEN_URL : CODEX_TOKEN_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch (e) {
-    return { retry: (e as Error).message };
-  }
-  const text = await res.text();
-  if (res.status === 400 || res.status === 401 || res.status === 403) return { refused: `${res.status} ${text.slice(0, 200)}` };
-  if (!res.ok) return { retry: `${res.status} ${text.slice(0, 200)}` };
-  const r = JSON.parse(text) as Record<string, unknown>;
-  if (provider === "claude") {
-    const old = (login as ClaudeLogin).claudeAiOauth;
-    const o: Record<string, unknown> = {
-      ...old,
-      accessToken: r.access_token,
-      refreshToken: r.refresh_token ?? old.refreshToken,
-      expiresAt: now + Number(r.expires_in) * 1000,
-    };
-    if (typeof r.refresh_token_expires_in === "number") o.refreshTokenExpiresAt = now + r.refresh_token_expires_in * 1000;
-    return { login: { ...(login as ClaudeLogin), claudeAiOauth: o } };
-  }
-  const l = login as CodexLogin;
-  return {
-    login: {
-      ...l,
-      tokens: { ...l.tokens, ...(r.id_token ? { id_token: r.id_token } : {}), ...(r.access_token ? { access_token: r.access_token } : {}), ...(r.refresh_token ? { refresh_token: r.refresh_token } : {}) },
-      last_refresh: new Date(now).toISOString(),
-    },
-  };
-}
-
 /** A refresh the provider answered whose login the store has not taken yet:
  *  kept here first, so a machine that dies in between does not lose it. */
 const pendingPath = (id: string): string => join(orgAccountsRoot(), `${id}.pending`);
 
 // ------------------------------------------------------------------- syncing
 
-/** A login's name on every machine: one email for claude and codex, one
- *  OpenCode account in one workspace for omp (an email can hold several,
- *  each its own sign-in). */
+/** A login's name on every machine: one email for claude and codex, its own
+ *  id for a provider whose email does not name it (omp). */
 function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
-  if (a.provider === "omp") {
-    const l = readGoLogin(a.home);
-    return l?.accountID ? `omp:${l.accountID}:${l.orgID ?? ""}` : null;
-  }
-  return a.email ? `${a.provider}:${a.email.toLowerCase()}` : null;
+  const id = KINDS[a.provider].id;
+  const name = id ? id(a.home) : a.email?.toLowerCase();
+  return name ? `${a.provider}:${name}` : null;
 }
 
-const storeKey = (d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null =>
-  d.provider === "omp" ? (d.externalId ? `omp:${d.externalId}` : null) : d.email ? `${d.provider}:${d.email}` : null;
+function storeKey(d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null {
+  const name = KINDS[d.provider].id ? d.externalId : d.email;
+  return name ? `${d.provider}:${name}` : null;
+}
 
 /** Every home here of a login the store keeps: each of yours logged in as
  *  it (the sharer's own account has its id), or the pool's mirror of it. */
@@ -298,8 +309,8 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
     // is newer than the store's; an older one is only a stale copy.
     const held = doc.login ? unseal<Login>(org.key, doc.login) : null;
     // NaN for a login that does not expire: devin's key, muse's api_key.
-    const age = (l: Login) => expiryOf(doc.provider, l);
-    const found = homes.flatMap((h) => loginIn(h) ?? []);
+    const age = (l: Login) => KINDS[doc.provider].expiry(l);
+    const found = homes.flatMap((h) => KINDS[h.provider].read(h) ?? []);
     // A login with an expiry is newest when it lasts longest. A static one
     // (devin's key, muse's api_key) has no expiry to compare: the login a
     // mirror holds that differs from the store's is one made there since.
@@ -359,7 +370,7 @@ async function refreshOne(doc: StoreAccount, login: Login, key: string, now: num
     { $set: { lease: { by: me, until: new Date(now + 60_000) } } },
   );
   if (!leased) return false;
-  const r = await refreshLogin(doc.provider, login, now);
+  const r = await KINDS[doc.provider].refresh!.run(login, now);
   if ("retry" in r) {
     console.error(`agentbox: org: refreshing ${doc.label} failed, will retry: ${r.retry}`);
     await col.updateOne({ _id: doc._id }, { $set: { lease: null } });
@@ -407,23 +418,17 @@ export async function shareWithOrg(accountId: string): Promise<void> {
     console.log(`agentbox: org: ${a.label} shared with ${org.name} again`);
     return;
   }
-  if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot share yet");
-  const login = loginIn(a);
-  if (!login) {
-    throw new OrgAccountError(
-      409,
-      a.provider === "muse"
-        ? `${a.label} can be shared only with a static api_key login: its token login (or the Keychain) rotates and would log every sharer out`
-        : `${a.label} is not logged in here`,
-    );
-  }
+  const kind = KINDS[a.provider];
+  if (kind.keychain && process.platform === "darwin") throw new OrgAccountError(400, `on macOS ${a.provider} keeps its login in the Keychain, which agentbox cannot share yet`);
+  const login = kind.read(a);
+  if (!login) throw new OrgAccountError(409, `${a.label} ${kind.unshareable ?? "is not logged in here"}`);
   await col.insertOne({
     _id: a.id,
     provider: a.provider,
     label: a.label,
     email: a.email?.toLowerCase() ?? null,
     plan: a.plan,
-    externalId: a.provider === "omp" ? loginKey(a)!.slice("omp:".length) : null,
+    externalId: kind.id?.(a.home) ?? null,
     login: seal(org.key, login),
     version: 1,
     refreshedAt: null,
@@ -467,16 +472,7 @@ export async function reclaimFromOrg(accountId: string): Promise<void> {
   }
   if (kept.login) {
     const login = unseal<Login>(org.key, kept.login);
-    for (const h of homesOf(kept)) if (!isOrgAccount(h)) writeLogin(h, login);
+    for (const h of homesOf(kept)) if (!isOrgAccount(h)) KINDS[h.provider].write(h, login);
   }
   console.log(`agentbox: org: ${a.label} taken back from ${org.name}'s store`);
-}
-
-/** A whole login, refresh token and all, into one of your homes. */
-function writeLogin(a: Account, login: Login): void {
-  if (a.provider === "omp") return writeGoLogin(a.home, login as GoLogin);
-  if (a.provider === "devin" || a.provider === "muse") return writeText(credentialsPath(a.provider, a.home)!, (login as StaticLogin).text);
-  writeJson(credentialsPath(a.provider, a.home)!, a.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
-  const oa = a.provider === "claude" ? (login as ClaudeLogin).oauthAccount : null;
-  if (oa) writeJson(claudeJsonPath(a), { ...(readJson(claudeJsonPath(a)) ?? {}), oauthAccount: oa });
 }
