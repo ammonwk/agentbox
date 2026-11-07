@@ -4390,14 +4390,14 @@ export class Fleet extends EventEmitter {
 
 // ---------------------------------------------------------------- helpers
 
-/** A turn error older than this is not retried on its own: it stalled before
- *  we were watching. */
 /** A session whose limit lifts within this of the hit is told to carry on: a
  *  5-hour window's length, the longest a 5-hour limit lasts. One that lifts
  *  later is old work, and yours to pick up or leave. */
 const CARRY_ON_WITHIN_MS = 5 * 60 * 60_000;
 /** Limits on one model from two accounts this close together are the model's. */
 const MODEL_WIDE_WITHIN_MS = 15 * 60_000;
+/** A turn error older than this is not retried on its own: it stalled before
+ *  we were watching. */
 const STALL_FRESH_MS = 15 * 60_000;
 /** A session stuck on an error screen is nudged once the error's reset window
  *  ("will reset in N seconds") has passed: this long after it last moved. */

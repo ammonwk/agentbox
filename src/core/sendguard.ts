@@ -113,12 +113,6 @@ export function countSend(from: string | null, to: string, now: number): void {
 }
 
 /**
- * An agent's message to `id` (`from` is the sending session, when known):
- * delivered to `id`, or to whoever has taken over from it, and counted; or
- * refused before anything is typed or resumed. `wake`: waking it is the
- * point, and a stopped one is resumed with the message.
- */
-/**
  * Where an agent's message to `id` goes (`to`: `id`, or whoever took over
  * from it) and why it may not, before anything is typed: the one check for
  * an agent's `agentbox send`.
@@ -135,6 +129,12 @@ export function agentRefusal(
   return { meant, to: to.id, refusal: refusal && (to.id === meant ? refusal : `${meant} has been taken over by ${to.id}. ${refusal}`) };
 }
 
+/**
+ * An agent's message to `id` (`from` is the sending session, when known):
+ * delivered to `id`, or to whoever has taken over from it, and counted; or
+ * refused before anything is typed or resumed. `wake`: waking it is the
+ * point, and a stopped one is resumed with the message.
+ */
 export async function sendAsAgent(
   fleet: Pick<Fleet, "get" | "heir" | "send">,
   id: string,

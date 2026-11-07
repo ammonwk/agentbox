@@ -269,7 +269,6 @@ export const api = {
   openFile: (id: string, path: string, background = false, dirs?: readonly string[]) =>
     post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background, dirs }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
-  /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   /** Go back to one of your messages and carry on from there with `text`; `code` puts the files back too. */
   edit: (id: string, turnId: string, text: string, mode: "send" | "code", sendId: string) =>
     request<{ receipt: SendReceipt } | { session: Session }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode, sendId }, AbortSignal.timeout(120_000)),
@@ -278,6 +277,7 @@ export const api = {
     request<{ session: Session }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode: "fork" }, AbortSignal.timeout(180_000)),
   /** Carry on from another version of a message (`TimelineEvent.versions`). */
   continueFrom: (id: string, via: string) => post<null>(`/api/sessions/${enc(id)}/continue-from`, { via }),
+  /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
   /** Esc in the session; with `takeBack`, an unanswered message Claude put back in its input box is cleared there and returned. */
   interrupt: (id: string, takeBack = false) => post<{ takenBack: string | null }>(`/api/sessions/${enc(id)}/interrupt`, { takeBack }),
@@ -338,10 +338,10 @@ export const api = {
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<LoadDetail>(`/api/sessions/${enc(id)}/load`),
   work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
-  /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
   /** Another member's org session: its conversation, as its machine answers (docs/org.md). */
   orgConversation: (id: string) =>
     get<{ session: string; person: string; machine: string; title: string; events: OrgReadEvent[] }>(`/api/org/sessions/${enc(id)}/conversation`),
+  /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
   agentTimeline: (id: string, agentId: string, since: string | null) =>
     get<AgentTimeline>(`/api/sessions/${enc(id)}/agents/${enc(agentId)}/timeline${since ? `?since=${encodeURIComponent(since)}` : ""}`),
 

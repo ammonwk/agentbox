@@ -270,7 +270,6 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
   return out;
 }
 
-/** The open PRs of one repo. */
 /**
  * Where a session in this repo starts, applied when the repo is picked: the
  * repo's default from Settings (repos.worktree_default). Null leaves the box
@@ -280,6 +279,7 @@ export function worktreeDefault(repo: Pick<Repo, "worktreeDefault">): boolean | 
   return repo.worktreeDefault;
 }
 
+/** The open PRs of one repo. */
 export function prsOf(prs: readonly PrInfo[], repo: Repo | null): PrInfo[] {
   if (!repo?.fullName) return [];
   return prs.filter((p) => p.repo === repo.fullName);

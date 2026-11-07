@@ -119,13 +119,6 @@ function contentText(content: unknown): string {
 
 // ------------------------------------------------------------- usage
 
-/**
- * `rate_limits` on a token_count event: `{limit_id, limit_name, primary,
- * secondary, plan_type, rate_limit_reached_type, credits}`, each window
- * `{used_percent, window_minutes, resets_at (unix s)}`. `limit_id` "codex" is
- * the account's own limit; others (e.g. "codex_bengalfox", limit_name
- * "GPT-5.3-Codex-Spark") are per-model limits.
- */
 /** The account's credit balance, as the usage endpoint and a rollout's
  *  `rate_limits` both report it: `{has_credits, unlimited, balance}`. */
 export function codexCredits(credits: any): CreditReading | null {
@@ -135,6 +128,13 @@ export function codexCredits(credits: any): CreditReading | null {
   return balance;
 }
 
+/**
+ * `rate_limits` on a token_count event: `{limit_id, limit_name, primary,
+ * secondary, plan_type, rate_limit_reached_type, credits}`, each window
+ * `{used_percent, window_minutes, resets_at (unix s)}`. `limit_id` "codex" is
+ * the account's own limit; others (e.g. "codex_bengalfox", limit_name
+ * "GPT-5.3-Codex-Spark") are per-model limits.
+ */
 export function codexWindows(rl: any): UsageWindow[] {
   if (!rl || typeof rl !== "object") return [];
   const limitId = typeof rl.limit_id === "string" ? rl.limit_id : "codex";

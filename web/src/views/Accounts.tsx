@@ -605,12 +605,6 @@ function AccountCard({
   );
 }
 
-/**
- * Codex hands out a few usage-limit resets, each spendable once: the CLI's
- * `/usage` menu shows how many and spends one. Here the count is part of the
- * account's usage, and you can spend one — the account is re-read straight
- * away, so sessions stopped at its limit are told to carry on.
- */
 /** "credits: 43,370 · ~608/day this week · ~71 days left" */
 function creditsLine(c: CreditBalance): string {
   if (c.balance === "unlimited") return "credits: unlimited";
@@ -624,6 +618,12 @@ function creditsLine(c: CreditBalance): string {
   return parts.join(" · ");
 }
 
+/**
+ * Codex hands out a few usage-limit resets, each spendable once: the CLI's
+ * `/usage` menu shows how many and spends one. Here the count is part of the
+ * account's usage, and you can spend one — the account is re-read straight
+ * away, so sessions stopped at its limit are told to carry on.
+ */
 function ResetCreditsPanel({ account: a }: { account: AccountView }) {
   const resets = a.usage.resets ?? null;
   const { run, busy, error } = useAction();

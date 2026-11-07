@@ -121,6 +121,11 @@ export type RailView = "active" | "inactive";
 /** How recent a session's last activity must be for the Active tab. */
 export const ACTIVE_MS = 3 * 60 * 60_000;
 
+/** Active on its own: running, recent, needing you or pinned (see splitActive). */
+export function isActive(s: SessionRow, now: number): boolean {
+  return s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS;
+}
+
 /**
  * The rows of each tab. A session is active while it runs, when it did
  * something within ACTIVE_MS, while it needs you (blocked on an approval or a
@@ -128,11 +133,6 @@ export const ACTIVE_MS = 3 * 60 * 60_000;
  * pinned: a pin keeps its place at the top. A tree goes whole to Active when any session in it is active, so a
  * lead and its teammates stay together.
  */
-/** Active on its own: running, recent, needing you or pinned (see splitActive). */
-export function isActive(s: SessionRow, now: number): boolean {
-  return s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS;
-}
-
 export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
   const up = parentsOf(rows);
   const rootOf = (id: string) => {

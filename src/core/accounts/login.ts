@@ -282,7 +282,6 @@ export class LoginManager extends EventEmitter {
     this.finish(run, "failed", "cancelled");
   }
 
-  /** Cancel whatever is running for an account (it is being forgotten). */
   /** The account is gone: stop its login, and drop finished ones — their
    *  messages are about an account that no longer exists. */
   cancelForAccount(accountId: string): void {

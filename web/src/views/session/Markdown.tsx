@@ -23,14 +23,14 @@ import { AgentDir, FileBase, inBase } from "./viewerstore";
 import { WaitRef } from "./WaitRef";
 import { turnStatus, type TurnStatus } from "../../../../src/core/turnstatus";
 
-/** Agent prose. External links open in a new tab: this page is a live
- *  terminal, and navigating away from it drops the attach. A link to another
- *  session stays here — it is the same page. */
 /** One line of it, inside something you click (a row's summary): no blocks,
  *  and a click on a link inside is the link's, not the row's. */
 const BLOCKS = ["h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "hr", "table", "thead", "tbody", "tr", "th", "td"];
 const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
 
+/** Agent prose. External links open in a new tab: this page is a live
+ *  terminal, and navigating away from it drops the attach. A link to another
+ *  session stays here — it is the same page. */
 export const Markdown = memo(function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);

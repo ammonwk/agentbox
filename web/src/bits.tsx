@@ -342,8 +342,6 @@ export function UsageBar({
 
 // ------------------------------------------------------------------- copy
 
-/** Copies, and says so for a moment. Falls back to selecting when the
- *  clipboard API is refused (plain http on a non-loopback host). */
 /** `navigator.clipboard` exists only in a secure context, and a phone on the
  *  tailnet reaches us over plain http; the old selection copy still works there. */
 export function copyText(text: string): Promise<void> {
@@ -360,6 +358,7 @@ export function copyText(text: string): Promise<void> {
   return ok ? Promise.resolve() : Promise.reject(new Error("copy refused"));
 }
 
+/** Copies, and says so for a moment. */
 export function CopyButton({ text, label, className }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);

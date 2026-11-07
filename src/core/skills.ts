@@ -222,7 +222,6 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
 
 // ─── Read / write / promote / demote ────────────────────────────────────────
 
-/** The skill directory a name resolves to in the global root. */
 /**
  * A skill name is one path segment. It arrives from the browser (demote) or
  * from a SKILL.md someone else wrote (promote), and joining an unchecked
@@ -233,6 +232,7 @@ export function validSkillName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !name.includes("..");
 }
 
+/** The skill directory a name resolves to in the global root. */
 function globalSkillDir(name: string): string {
   if (!validSkillName(name)) throw new Error(`not a valid skill name: ${JSON.stringify(name)}`);
   return join(userHome(), ".claude", "skills", name);

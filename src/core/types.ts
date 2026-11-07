@@ -760,11 +760,6 @@ export type TimelineEvent = { id: string; at: number } & (
   | { kind: "meta"; text: string; tone?: "info" | "warn" | "error"; mate?: MateMessage }
 );
 
-/**
- * A side question (Claude's /btw) and its answer. Claude keeps these only in
- * the running process's memory, never in the transcript, so agentbox keeps
- * them: asked from the Timeline, or seen asked in the terminal.
- */
 /** Delivery metadata only; the provider's transcript remains the record. */
 export interface SendReceipt {
   id: string;
@@ -774,6 +769,11 @@ export interface SendReceipt {
   error: string | null;
 }
 
+/**
+ * A side question (Claude's /btw) and its answer. Claude keeps these only in
+ * the running process's memory, never in the transcript, so agentbox keeps
+ * them: asked from the Timeline, or seen asked in the terminal.
+ */
 export interface Btw {
   id: number;
   sessionId: string;
@@ -1006,7 +1006,6 @@ export interface PrInfo {
   owner: string | null;
 }
 
-/** A pull request and the live session that has it (src/core/prclaims.ts). */
 /** What a close did: the sessions it closed, those it started that it left
  *  open for the work they hold, and what the one asked for gave up. */
 export interface Closed {
@@ -1017,6 +1016,7 @@ export interface Closed {
   said: string;
 }
 
+/** A pull request and the live session that has it (src/core/prclaims.ts). */
 export interface PrClaim {
   repo: string;
   number: number;
@@ -1524,11 +1524,11 @@ export interface ColdState {
   org: OrgStatus | null;
 }
 
-/** Another member's org session, as the board shows it (docs/org.md). */
 /** One line of an org session's conversation as a member reads it: what was
  *  said, and the tools it ran by their one-line summary (src/core/org/store.ts). */
 export type OrgReadEvent = { at: number } & ({ kind: "user" | "assistant"; text: string } | { kind: "tool"; name: string; summary: string });
 
+/** Another member's org session, as the board shows it (docs/org.md). */
 export interface OrgSessionView {
   id: string;
   person: string;
