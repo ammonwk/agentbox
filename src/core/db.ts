@@ -20,7 +20,6 @@ import type {
   TokenTotals,
   UsageWindow,
   Wait,
-  WaitSpec,
 } from "./types";
 
 import type { ModelOutcome } from "./providers/types";
@@ -526,30 +525,105 @@ function migrate(d: Database) {
   if (!columns.some((c) => c.name === "told_at")) d.exec("ALTER TABLE pr_releases ADD COLUMN told_at INTEGER");
 }
 
+// -------------------------------------------------------- rows and records
+//
+// A record's key is its column's name in camelCase (`agentSessionId` is
+// `agent_session_id`), so a field added to a record type and, by a
+// migration, to its table needs nothing more here. What differs by table is
+// which keys are kept as JSON and which as 0/1.
+
+type Row = Record<string, unknown>;
+type Shape = { json?: ReadonlySet<string>; bool?: ReadonlySet<string> };
+
+function keyOf(column: string): string {
+  return column.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+function columnOf(key: string): string {
+  return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+
+function parseJson(raw: string | null): unknown {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** A row as its record: JSON that does not parse is null, a 0/1 is false/true. */
+function fromRow<T>(row: Row, shape: Shape = {}): T {
+  const out: Row = {};
+  for (const [column, v] of Object.entries(row)) {
+    const key = keyOf(column);
+    out[key] = shape.json?.has(key) ? parseJson(v as string | null) : shape.bool?.has(key) ? !!v : v;
+  }
+  return out as T;
+}
+
+const tableColumns = new WeakMap<Database, Map<string, Set<string>>>();
+
+function columnsOf(table: string): Set<string> {
+  const d = getDb();
+  let byTable = tableColumns.get(d);
+  if (!byTable) tableColumns.set(d, (byTable = new Map()));
+  let columns = byTable.get(table);
+  if (!columns) {
+    columns = new Set((d.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+    byTable.set(table, columns);
+  }
+  return columns;
+}
+
+/** The columns `fields` writes and their values. A key the table has no
+ *  column for is dropped, so a patch can never name a column of its own. */
+function toColumns(table: string, fields: object, shape: Shape, skip?: string): [string[], (string | number | null)[]] {
+  const have = columnsOf(table);
+  const cols: string[] = [];
+  const vals: (string | number | null)[] = [];
+  for (const [key, v] of Object.entries(fields)) {
+    const column = columnOf(key);
+    if (key === skip || !have.has(column)) continue;
+    cols.push(column);
+    vals.push(v === undefined || v === null ? null
+      : shape.json?.has(key) ? JSON.stringify(v)
+      : typeof v === "boolean" ? (v ? 1 : 0)
+      : (v as string | number));
+  }
+  return [cols, vals];
+}
+
+function insertFields(table: string, fields: object, shape: Shape): void {
+  const [cols, vals] = toColumns(table, fields, shape);
+  getDb().run(`INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`, vals);
+}
+
+/** Write a patch to the row whose `id` is `id`; false when it named no column. */
+function updateFields(table: string, id: string | number, patch: object, shape: Shape): boolean {
+  const [cols, vals] = toColumns(table, patch, shape, "id");
+  if (cols.length === 0) return false;
+  getDb().run(`UPDATE ${table} SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`, [...vals, id]);
+  return true;
+}
+
 // --------------------------------------------------------------- accounts
 
-type AccountRow = {
-  id: string; provider: string; label: string; email: string | null; plan: string | null;
-  home: string; is_default: number; enabled: number; created_at: number;
-};
+const ACCOUNT_SHAPE: Shape = { bool: new Set(["isDefault", "enabled"]) };
 
-function rowToAccount(r: AccountRow): Account {
-  return {
-    id: r.id, provider: r.provider as AccountProvider, label: r.label, email: r.email,
-    plan: r.plan, home: r.home, isDefault: !!r.is_default, enabled: !!r.enabled,
-    createdAt: r.created_at,
-  };
+function rowToAccount(r: Row): Account {
+  return fromRow<Account>(r, ACCOUNT_SHAPE);
 }
 
 export function listAccounts(provider?: AccountProvider): Account[] {
   const rows = provider
     ? getDb().query("SELECT * FROM accounts WHERE provider = ? ORDER BY is_default DESC, created_at").all(provider)
     : getDb().query("SELECT * FROM accounts ORDER BY provider, is_default DESC, created_at").all();
-  return (rows as AccountRow[]).map(rowToAccount);
+  return (rows as Row[]).map(rowToAccount);
 }
 
 export function getAccount(id: string): Account | null {
-  const row = getDb().query("SELECT * FROM accounts WHERE id = ?").get(id) as AccountRow | null;
+  const row = getDb().query("SELECT * FROM accounts WHERE id = ?").get(id) as Row | null;
   return row ? rowToAccount(row) : null;
 }
 
@@ -668,93 +742,13 @@ export interface SessionRecord {
   scope: Scope;
 }
 
-type SessionRow = {
-  id: string; provider: string; agent_session_id: string | null; account_id: string | null;
-  cwd: string; worktree: string | null; label: string | null; claim: number;
-  origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
-  last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
-  launch: string | null; effort: string | null; model: string | null; model_at: number | null; parent: string | null;
-  parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
-  pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
-  scope: Scope;
+const SESSION_SHAPE: Shape = {
+  json: new Set(["facts", "launch", "parkedMates"]),
+  bool: new Set(["parentByHand", "quiet"]),
 };
 
-function parseJson(raw: string | null): unknown {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function rowToRecord(r: SessionRow): SessionRecord {
-  return {
-    id: r.id, provider: r.provider as AccountProvider, agentSessionId: r.agent_session_id,
-    accountId: r.account_id, cwd: r.cwd, worktree: r.worktree, label: r.label,
-    claim: r.claim, origin: r.origin as SessionRecord["origin"], tmux: r.tmux,
-    transcriptPath: r.transcript_path, startedAt: r.started_at,
-    lastActivityAt: r.last_activity_at, archivedAt: r.archived_at,
-    facts: parseJson(r.facts), createdAt: r.created_at,
-    launch: (parseJson(r.launch) as Launch | null) ?? null,
-    effort: r.effort ?? null,
-    model: r.model ?? null,
-    modelAt: r.model_at ?? null,
-    parent: r.parent ?? null,
-    parentByHand: !!r.parent_by_hand,
-    parkedAt: r.parked_at ?? null,
-    parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
-    parkedWhy: r.parked_why ?? null,
-    successor: r.successor ?? null,
-    hoppedAt: r.hopped_at ?? null,
-    pinOrder: r.pin_order ?? null,
-    bookmarkedAt: r.bookmarked_at ?? null,
-    quiet: !!r.quiet,
-    scope: r.scope,
-  };
-}
-
-const RECORD_COLUMNS = {
-  provider: "provider",
-  agentSessionId: "agent_session_id",
-  accountId: "account_id",
-  cwd: "cwd",
-  worktree: "worktree",
-  label: "label",
-  claim: "claim",
-  origin: "origin",
-  tmux: "tmux",
-  transcriptPath: "transcript_path",
-  startedAt: "started_at",
-  lastActivityAt: "last_activity_at",
-  archivedAt: "archived_at",
-  facts: "facts",
-  createdAt: "created_at",
-  launch: "launch",
-  effort: "effort",
-  model: "model",
-  modelAt: "model_at",
-  parent: "parent",
-  parentByHand: "parent_by_hand",
-  parkedAt: "parked_at",
-  parkedMates: "parked_mates",
-  parkedWhy: "parked_why",
-  successor: "successor",
-  hoppedAt: "hopped_at",
-  pinOrder: "pin_order",
-  bookmarkedAt: "bookmarked_at",
-  quiet: "quiet",
-  scope: "scope",
-} as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
-
-type RecordKey = keyof typeof RECORD_COLUMNS;
-
-function recordToSql(key: RecordKey, value: unknown): string | number | null {
-  if (value === undefined || value === null) return null;
-  if (key === "facts" || key === "launch" || key === "parkedMates") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? 1 : 0;
-  return value as string | number;
+function rowToRecord(r: Row): SessionRecord {
+  return fromRow<SessionRecord>(r, SESSION_SHAPE);
 }
 
 /**
@@ -769,8 +763,8 @@ let recordCache: { db: Database; byId: Map<string, SessionRecord> } | null = nul
 function cachedRecords(): Map<string, SessionRecord> {
   const d = getDb();
   if (recordCache?.db !== d) {
-    const rows = d.query("SELECT * FROM sessions").all() as SessionRow[];
-    recordCache = { db: d, byId: new Map(rows.map((r) => [r.id, Object.freeze(rowToRecord(r))])) };
+    const rows = d.query("SELECT * FROM sessions").all() as Row[];
+    recordCache = { db: d, byId: new Map(rows.map((r) => [r.id as string, Object.freeze(rowToRecord(r))])) };
   }
   return recordCache.byId;
 }
@@ -778,44 +772,29 @@ function cachedRecords(): Map<string, SessionRecord> {
 /** Re-read one row into the cache after a write, so it holds what the table does. */
 function recacheRecord(id: string): void {
   const byId = cachedRecords();
-  const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null;
+  const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as Row | null;
   if (row) byId.set(id, Object.freeze(rowToRecord(row)));
   else byId.delete(id);
 }
 
 export function insertSessionRecord(r: SessionRecord): void {
-  const keys = Object.keys(RECORD_COLUMNS) as RecordKey[];
-  const cols = ["id", ...keys.map((k) => RECORD_COLUMNS[k])];
-  getDb().run(
-    `INSERT INTO sessions (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
-    [r.id, ...keys.map((k) => recordToSql(k, r[k]))],
-  );
+  insertFields("sessions", r, SESSION_SHAPE);
   recacheRecord(r.id);
 }
 
 export function updateSessionRecord(id: string, patch: Partial<SessionRecord>): void {
-  const sets: string[] = [];
-  const vals: (string | number | null)[] = [];
-  for (const key of Object.keys(patch) as (keyof SessionRecord)[]) {
-    if (key === "id" || !(key in RECORD_COLUMNS)) continue;
-    const k = key as RecordKey;
-    sets.push(`${RECORD_COLUMNS[k]} = ?`);
-    vals.push(recordToSql(k, patch[key]));
-  }
-  if (sets.length === 0) return;
-  getDb().run(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
-  recacheRecord(id);
+  if (updateFields("sessions", id, patch, SESSION_SHAPE)) recacheRecord(id);
 }
 
 export function getSessionRecord(id: string): SessionRecord | null {
-  const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null;
+  const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as Row | null;
   return row ? rowToRecord(row) : null;
 }
 
 export function findSessionRecord(provider: ProviderId, agentSessionId: string): SessionRecord | null {
   const row = getDb()
     .query("SELECT * FROM sessions WHERE provider = ? AND agent_session_id = ?")
-    .get(provider, agentSessionId) as SessionRow | null;
+    .get(provider, agentSessionId) as Row | null;
   return row ? rowToRecord(row) : null;
 }
 
@@ -871,49 +850,19 @@ export function resolveSessionRefs(refs: readonly string[]): Record<string, stri
 export function listClosedRecords(): SessionRecord[] {
   const rows = getDb()
     .query("SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC")
-    .all() as SessionRow[];
+    .all() as Row[];
   return rows.map(rowToRecord);
 }
 
 // ------------------------------------------------------------------ waits
 
-type WaitRow = {
-  id: number; session_id: string; spec: string; created_at: number; deadline: number; ended: string | null;
-  outcome: string | null; ended_at: number | null; told_at: number | null; untold: string | null;
-  checked_at: number | null; seen: string | null; failing_since: number | null; memo: string | null;
-};
+const WAIT_SHAPE: Shape = { json: new Set(["spec", "memo"]) };
 
-function rowToWait(r: WaitRow): Wait {
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    spec: parseJson(r.spec) as WaitSpec,
-    createdAt: r.created_at,
-    deadline: r.deadline,
-    ended: r.ended as Wait["ended"],
-    outcome: r.outcome,
-    endedAt: r.ended_at,
-    toldAt: r.told_at,
-    untold: r.untold,
-    checkedAt: r.checked_at,
-    seen: r.seen,
-    failingSince: r.failing_since,
-    memo: (r.memo ? parseJson(r.memo) : {}) as Wait["memo"],
-  };
+function rowToWait(r: Row): Wait {
+  const w = fromRow<Wait>(r, WAIT_SHAPE);
+  if (!r.memo) w.memo = {};
+  return w;
 }
-
-const WAIT_COLUMNS = {
-  deadline: "deadline",
-  ended: "ended",
-  outcome: "outcome",
-  endedAt: "ended_at",
-  toldAt: "told_at",
-  untold: "untold",
-  checkedAt: "checked_at",
-  seen: "seen",
-  failingSince: "failing_since",
-  memo: "memo",
-} as const;
 
 export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "deadline"> & { memo?: Wait["memo"] }): Wait {
   const { lastInsertRowid } = getDb().run("INSERT INTO waits (session_id, spec, created_at, deadline, memo) VALUES (?,?,?,?,?)", [
@@ -923,13 +872,13 @@ export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "d
 }
 
 export function getWait(id: number): Wait | null {
-  const row = getDb().query("SELECT * FROM waits WHERE id = ?").get(id) as WaitRow | null;
+  const row = getDb().query("SELECT * FROM waits WHERE id = ?").get(id) as Row | null;
   return row ? rowToWait(row) : null;
 }
 
 /** Those still going, and those that ended since `since` with their session not yet told. */
 export function listOpenWaits(since: number): Wait[] {
-  return (getDb().query("SELECT * FROM waits WHERE ended IS NULL OR (told_at IS NULL AND ended != 'cancelled' AND ended_at >= ?) ORDER BY id").all(since) as WaitRow[]).map(rowToWait);
+  return (getDb().query("SELECT * FROM waits WHERE ended IS NULL OR (told_at IS NULL AND ended != 'cancelled' AND ended_at >= ?) ORDER BY id").all(since) as Row[]).map(rowToWait);
 }
 
 /** Every wait made or ended since `since`, and all still going; one session's when named. */
@@ -937,7 +886,7 @@ export function listWaits(since: number, sessionId?: string): Wait[] {
   const rows = sessionId
     ? getDb().query("SELECT * FROM waits WHERE session_id = ? AND (ended IS NULL OR told_at IS NULL OR ended_at >= ?) ORDER BY id").all(sessionId, since)
     : getDb().query("SELECT * FROM waits WHERE ended IS NULL OR told_at IS NULL OR ended_at >= ? ORDER BY id").all(since);
-  return (rows as WaitRow[]).map(rowToWait);
+  return (rows as Row[]).map(rowToWait);
 }
 
 /** The session that armed the wait on job `unit`. */
@@ -946,96 +895,37 @@ export function sessionOfJob(unit: string): string | null {
   return row?.session_id ?? null;
 }
 
-export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WAIT_COLUMNS>>): void {
-  const sets: string[] = [];
-  const vals: (string | number | null)[] = [];
-  for (const key of Object.keys(patch) as (keyof typeof WAIT_COLUMNS)[]) {
-    const v = patch[key];
-    sets.push(`${WAIT_COLUMNS[key]} = ?`);
-    vals.push(v === undefined || v === null ? null : key === "memo" ? JSON.stringify(v) : (v as string | number));
-  }
-  if (sets.length) getDb().run(`UPDATE waits SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
+export function updateWait(id: number, patch: Partial<Omit<Wait, "id" | "sessionId" | "spec" | "createdAt">>): void {
+  updateFields("waits", id, patch, WAIT_SHAPE);
 }
 
 // -------------------------------------------------------------- schedules
 
-type ScheduleRow = {
-  id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
-  created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
-  note_cmd: string | null;
-};
+const SCHEDULE_SHAPE: Shape = { json: new Set(["rule", "spec"]), bool: new Set(["enabled"]) };
 
-function rowToSchedule(r: ScheduleRow): Schedule {
-  return {
-    id: r.id,
-    rule: parseJson(r.rule) as Schedule["rule"],
-    spec: parseJson(r.spec) as Schedule["spec"],
-    label: r.label,
-    enabled: r.enabled === 1,
-    nextAt: r.next_at,
-    createdAt: r.created_at,
-    lastRunAt: r.last_run_at,
-    lastSessionId: r.last_session_id,
-    lastError: r.last_error,
-    noteCmd: r.note_cmd,
-  };
-}
-
-const SCHEDULE_COLUMNS = {
-  rule: "rule",
-  spec: "spec",
-  label: "label",
-  enabled: "enabled",
-  nextAt: "next_at",
-  createdAt: "created_at",
-  lastRunAt: "last_run_at",
-  lastSessionId: "last_session_id",
-  lastError: "last_error",
-  noteCmd: "note_cmd",
-} as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
-
-type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;
-
-function scheduleToSql(key: ScheduleKey, value: unknown): string | number | null {
-  if (value === undefined || value === null) return null;
-  if (key === "rule" || key === "spec") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? 1 : 0;
-  return value as string | number;
+function rowToSchedule(r: Row): Schedule {
+  return fromRow<Schedule>(r, SCHEDULE_SHAPE);
 }
 
 /** The soonest first; those with nothing coming last. */
 export function listSchedules(): Schedule[] {
   const rows = getDb()
     .query("SELECT * FROM schedules ORDER BY next_at IS NULL, next_at, created_at")
-    .all() as ScheduleRow[];
+    .all() as Row[];
   return rows.map(rowToSchedule);
 }
 
 export function getSchedule(id: string): Schedule | null {
-  const row = getDb().query("SELECT * FROM schedules WHERE id = ?").get(id) as ScheduleRow | null;
+  const row = getDb().query("SELECT * FROM schedules WHERE id = ?").get(id) as Row | null;
   return row ? rowToSchedule(row) : null;
 }
 
 export function insertSchedule(s: Schedule): void {
-  const keys = Object.keys(SCHEDULE_COLUMNS) as ScheduleKey[];
-  const cols = ["id", ...keys.map((k) => SCHEDULE_COLUMNS[k])];
-  getDb().run(
-    `INSERT INTO schedules (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
-    [s.id, ...keys.map((k) => scheduleToSql(k, s[k]))],
-  );
+  insertFields("schedules", s, SCHEDULE_SHAPE);
 }
 
 export function updateSchedule(id: string, patch: Partial<Schedule>): void {
-  const sets: string[] = [];
-  const vals: (string | number | null)[] = [];
-  for (const key of Object.keys(patch) as (keyof Schedule)[]) {
-    if (key === "id" || !(key in SCHEDULE_COLUMNS)) continue;
-    const k = key as ScheduleKey;
-    sets.push(`${SCHEDULE_COLUMNS[k]} = ?`);
-    vals.push(scheduleToSql(k, patch[key]));
-  }
-  if (sets.length === 0) return;
-  getDb().run(`UPDATE schedules SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
+  updateFields("schedules", id, patch, SCHEDULE_SHAPE);
 }
 
 export function deleteSchedule(id: string): void {
@@ -1343,26 +1233,19 @@ export interface AssignmentRow {
   why: string;
 }
 
+const ASSIGNMENT_SHAPE: Shape = { json: new Set(["candidates", "settings"]) };
+
 export function insertAssignment(a: AssignmentRow): void {
-  getDb().run(
-    `INSERT INTO assignments (id,session_id,at,provider,account_id,mode,claim,candidates,settings,why)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [a.id, a.sessionId, a.at, a.provider, a.accountId, a.mode, a.claim,
-     JSON.stringify(a.candidates), JSON.stringify(a.settings), a.why],
-  );
+  insertFields("assignments", a, ASSIGNMENT_SHAPE);
 }
 
 export function assignmentsSince(sinceMs: number): AssignmentRow[] {
-  const rows = getDb().query("SELECT * FROM assignments WHERE at >= ? ORDER BY at").all(sinceMs) as {
-    id: string; session_id: string | null; at: number; provider: string; account_id: string | null;
-    mode: string; claim: number; candidates: string; settings: string; why: string;
-  }[];
-  return rows.map((r) => ({
-    id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as AccountProvider,
-    accountId: r.account_id, mode: r.mode, claim: r.claim,
-    candidates: (parseJson(r.candidates) as Candidate[]) ?? [],
-    settings: parseJson(r.settings) as BalancerSettings, why: r.why,
-  }));
+  const rows = getDb().query("SELECT * FROM assignments WHERE at >= ? ORDER BY at").all(sinceMs) as Row[];
+  return rows.map((r) => {
+    const a = fromRow<AssignmentRow>(r, ASSIGNMENT_SHAPE);
+    a.candidates ??= [];
+    return a;
+  });
 }
 
 /** The account a session was on at `at`: its last placement or move by then. */
@@ -1399,20 +1282,12 @@ export function modelOutcomesSince(provider: ProviderId, sinceMs: number): { acc
 
 // -------------------------------------------------------------------- btw
 
-type BtwRow = {
-  id: number; session_id: string; question: string; answer: string | null; error: string | null;
-  status: string; source: string; asked_at: number; answered_at: number | null;
-};
-
-const rowToBtw = (r: BtwRow): Btw => ({
-  id: r.id, sessionId: r.session_id, question: r.question, answer: r.answer, error: r.error,
-  status: r.status as Btw["status"], source: r.source as Btw["source"], askedAt: r.asked_at, answeredAt: r.answered_at,
-});
+const rowToBtw = (r: Row): Btw => fromRow<Btw>(r);
 
 export function insertBtw(b: Pick<Btw, "sessionId" | "question" | "source" | "askedAt">): Btw {
   const r = getDb()
     .query("INSERT INTO btw (session_id,question,status,source,asked_at) VALUES (?,?,'asking',?,?) RETURNING *")
-    .get(b.sessionId, b.question, b.source, b.askedAt) as BtwRow;
+    .get(b.sessionId, b.question, b.source, b.askedAt) as Row;
   return rowToBtw(r);
 }
 
@@ -1422,7 +1297,7 @@ export function finishBtw(id: number, done: { answer: string } | { error: string
 }
 
 export function listBtw(sessionId: string): Btw[] {
-  return (getDb().query("SELECT * FROM btw WHERE session_id = ? ORDER BY asked_at, id").all(sessionId) as BtwRow[]).map(rowToBtw);
+  return (getDb().query("SELECT * FROM btw WHERE session_id = ? ORDER BY asked_at, id").all(sessionId) as Row[]).map(rowToBtw);
 }
 
 /** Taken back before it answered, or its card put away once it has: hidden from the Timeline; the record stays. */
