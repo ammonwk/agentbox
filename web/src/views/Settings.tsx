@@ -307,6 +307,14 @@ function General({ settings, save, saveStateOf }: SectionProps) {
           anyone. Sessions already running keep the mode they started in.
         </p>
       )}
+
+      <ToggleRow
+        label="Review cards"
+        hint="Lets sessions put decisions and notes on the Review page. Off, agentbox card add is refused and every session is told to ask you in its own conversation instead. A session gets the new briefing when it next starts or resumes; cards already there stay."
+        checked={settings.reviewCards}
+        onChange={(v) => save("reviewCards", { reviewCards: v })}
+      />
+      <SaveMark state={saveStateOf("reviewCards")} />
     </section>
   );
 }

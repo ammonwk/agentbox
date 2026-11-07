@@ -76,6 +76,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
+  reviewCards: true,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
   retiredModels: {},
   scope: "personal",
