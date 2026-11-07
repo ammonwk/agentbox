@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { type AppState, type Card, AttachButton, AttachFrame, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
+import { type AppState, type Card, type Repo, type Session, AttachButton, AttachFrame, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
 import { laterOf, stackOf } from "./cardorder";
 import "./review.css";
 
@@ -25,7 +25,36 @@ const api = {
   answerCard: (id: number, text: string) => call<Card>("POST", `/api/cards/${id}/answer`, { text }),
   laterCard: (id: number) => call<Card>("POST", `/api/cards/${id}/later`),
   undoCard: (id: number) => call<Card>("POST", `/api/cards/${id}/undo`),
+  start: (body: { provider: string; cwd: string; prompt: string }) => call<{ session: Session }>("POST", "/api/sessions", body),
 };
+
+/** How long "catching you up" stays, with its link to the session. */
+const CAUGHT_UP_SHOWN_MS = 15_000;
+/** How many cards are marked seen at once when a catch-up takes them. */
+const SEEN_AT_ONCE = 8;
+
+/** Where a catch-up session runs: the checkout of the repo most of its pull requests are in, else home. */
+function catchUpDir(cards: Card[], repos: Repo[]): string {
+  const n = new Map<string, number>();
+  for (const c of cards) {
+    const slug = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(c.pr ?? "")?.[1]?.toLowerCase();
+    const repo = slug && repos.find((r) => r.fullName?.toLowerCase() === slug && r.checkoutRoot);
+    if (repo) n.set(repo.checkoutRoot!, (n.get(repo.checkoutRoot!) ?? 0) + 1);
+  }
+  return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "~";
+}
+
+/** What the catch-up session is asked, as you: read the cards, teach what changed in one page, hand it back as a card. */
+function catchUpPrompt(cards: Card[]): string {
+  const ids = cards.map((c) => c.id).sort((a, b) => a - b).join(" ");
+  return `Catch me up on the ${cards.length} pull requests that merged while I wasn't keeping up. They are Review cards ${ids}. Read them all with \`agentbox card show ${ids}\` (each has a title, a summary, the PR's link, and often a long version). Where a card doesn't tell you enough to explain the change, read the PR (\`gh pr view\`, \`gh pr diff\`) and the code it touched.
+
+Then make me one HTML page that gets me up to date on how our system has changed. It is a lesson, not a changelog, and it need not mention every PR: use everything you know to teach me what changed in the way I'll understand and remember best. Group changes by the part of the system and the idea behind them, not by PR; lead with what changes most how the product behaves and how I'd work on it; say what it did before and what it does now, and why; use diagrams, worked examples, tables or whatever teaches each one best. Link each PR you draw on, so I can go deeper, and end with a short list of the minor ones. It should read well on a phone and on a desk, in light and dark.
+
+Write it to \`\${AGENTBOX_HOME:-$HOME/.local/share/agentbox}/catch-up/<YYYY-MM-DD-HHMM>.html\`, self-contained: inline CSS and scripts, no fetches, no CDNs. This is reading and writing that page only: change no code and no repo.
+
+When the page is done, hand it to me as a card, last: \`agentbox card add --kind note --title "Catch up: <what changed, in a line>" --short "<the two or three biggest changes, in a sentence or two>. [Open the page](<the page's absolute path>)"\`. That card is how I'll find it.`;
+}
 
 type Tab = "stack" | "later" | "done";
 /** How long the last gesture can be taken back; the server holds an answer this long (UNDO_MS). */
@@ -74,6 +103,11 @@ export function Review({ state }: { state: AppState }) {
   );
 
   const [answering, setAnswering] = useState<Card | null>(null);
+  /** Merged cards not yet seen: a right swipe on one hands them all to a catch-up session. */
+  const merged = useMemo(() => cards.filter((c) => c.kind === "merged" && (c.state === "open" || c.state === "later")), [cards]);
+  const [catchingUp, setCatchingUp] = useState(false);
+  const [caughtUp, setCaughtUp] = useState<{ session: string; n: number } | null>(null);
+  const respond = useCallback((c: Card) => (c.kind === "merged" ? setCatchingUp(true) : setAnswering(c)), []);
   const [reading, setReading] = useState<Card | null>(null);
   const [leaving, setLeaving] = useState<{ id: number; to: "left" | "right" | "down" } | null>(null);
   const [last, setLast] = useState<{ card: Card; what: "answered" | "approved" | "seen" | "later"; at: number } | null>(null);
@@ -85,6 +119,12 @@ export function Review({ state }: { state: AppState }) {
     return () => clearTimeout(t);
   }, [nothing]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!caughtUp) return;
+    const t = setTimeout(() => setCaughtUp(null), CAUGHT_UP_SHOWN_MS);
+    return () => clearTimeout(t);
+  }, [caughtUp]);
 
   useEffect(() => {
     if (!last) return;
@@ -140,6 +180,36 @@ export function Review({ state }: { state: AppState }) {
     });
   }, [last]);
 
+  /** Start the session that writes the catch-up page, then mark every card it took seen. */
+  const catchUp = useCallback(
+    async (list: Card[]) => {
+      const { session } = await api.start({ provider: "claude", cwd: catchUpDir(list, state.repos), prompt: catchUpPrompt(list) });
+      setCatchingUp(false);
+      setReading(null);
+      setLast(null);
+      setError(null);
+      setCaughtUp({ session: session.id, n: list.length });
+      const at = Date.now();
+      setLocal((prev) => {
+        const next = new Map(prev);
+        for (const c of list) next.set(c.id, { state: "answered", answer: "", answeredAt: at });
+        return next;
+      });
+      const failed: Card[] = [];
+      for (let i = 0; i < list.length; i += SEEN_AT_ONCE) {
+        await Promise.all(list.slice(i, i + SEEN_AT_ONCE).map((c) => api.answerCard(c.id, "").catch(() => failed.push(c))));
+      }
+      if (!failed.length) return;
+      setError(`The catch-up started, but ${failed.length} of its cards could not be marked seen.`);
+      setLocal((prev) => {
+        const next = new Map(prev);
+        for (const c of failed) next.delete(c.id);
+        return next;
+      });
+    },
+    [state.repos],
+  );
+
   /** Down: the recommendation is the answer, or the card is seen; a decision without one stays. */
   const approve = useCallback(
     (card: Card) => {
@@ -157,7 +227,7 @@ export function Review({ state }: { state: AppState }) {
   // The keys, while no sheet has the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (answering || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (answering || catchingUp || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (!el?.closest(".review")) return;
       if (e.key.startsWith("Arrow") && !e.shiftKey) return;
@@ -165,7 +235,7 @@ export function Review({ state }: { state: AppState }) {
       const card = reading ?? (tab === "stack" ? shownTop : null);
       if (e.key === "u") undo();
       else if (!card || card.state === "answered" || card.state === "closed") return;
-      else if (e.key === "ArrowRight") setAnswering(card);
+      else if (e.key === "ArrowRight") respond(card);
       else if (e.key === "ArrowLeft") act(card, "later");
       else if (e.key === "ArrowUp" && !reading) setReading(card);
       else if (e.key === "ArrowDown" && !reading) approve(card);
@@ -175,7 +245,7 @@ export function Review({ state }: { state: AppState }) {
     };
     addEventListener("keydown", onKey, true);
     return () => removeEventListener("keydown", onKey, true);
-  }, [answering, reading, tab, shownTop, act, undo, approve]);
+  }, [answering, catchingUp, reading, tab, shownTop, act, undo, approve, respond]);
 
   return (
     <div className="review">
@@ -223,7 +293,7 @@ export function Review({ state }: { state: AppState }) {
                       state={state}
                       depth={Math.max(depth, 0)}
                       leaving={leaving?.id === c.id ? leaving.to : null}
-                      onRight={() => setAnswering(c)}
+                      onRight={() => respond(c)}
                       onLeft={() => act(c, "later")}
                       onUp={() => setReading(c)}
                       onDown={() => approve(c)}
@@ -239,13 +309,24 @@ export function Review({ state }: { state: AppState }) {
                 </>
               )}
             </p>
-            <Actions card={top ?? shownTop!} onLater={(c) => act(c, "later")} onRead={setReading} onApprove={approve} onAnswer={setAnswering} />
+            <Actions card={top ?? shownTop!} merged={merged.length} onLater={(c) => act(c, "later")} onRead={setReading} onApprove={approve} onAnswer={respond} />
           </>
         )
       ) : (
         <CardList cards={tab === "later" ? later : done} state={state} empty={tab === "later" ? "Nothing kept for later." : "Nothing answered yet."} onOpen={setReading} />
       )}
 
+      {caughtUp && !last ? (
+        <div className="review-undo" role="status">
+          <span>
+            Catching you up on {caughtUp.n} merged PR{caughtUp.n === 1 ? "" : "s"}
+            <span className="faint"> · they are marked seen; the page comes back here as a card</span>
+          </span>
+          <a className="btn btn-default btn-sm" href={href({ page: "session", id: caughtUp.session, tab: "timeline" })}>
+            Watch it
+          </a>
+        </div>
+      ) : null}
       {last ? (
         <div className="review-undo" role="status">
           <span>
@@ -265,9 +346,11 @@ export function Review({ state }: { state: AppState }) {
           onClose={() => setReading(null)}
           onLater={(c) => act(c, "later")}
           onApprove={approve}
-          onAnswer={setAnswering}
+          onAnswer={respond}
+          merged={merged.length}
         />
       ) : null}
+      {catchingUp ? <CatchUpSheet cards={merged} onClose={() => setCatchingUp(false)} onStart={catchUp} /> : null}
       {answering ? <AnswerSheet card={answering} onClose={() => setAnswering(null)} onSend={(text) => act(answering, text ? "answered" : "seen", text)} /> : null}
     </div>
   );
@@ -280,6 +363,7 @@ function Actions({
   onRead,
   onApprove,
   onAnswer,
+  merged,
   long,
 }: {
   card: Card;
@@ -287,6 +371,8 @@ function Actions({
   onRead?: (c: Card) => void;
   onApprove: (c: Card) => void;
   onAnswer: (c: Card) => void;
+  /** How many merged cards a catch-up would take. */
+  merged: number;
   long?: boolean;
 }) {
   const does = downOf(card);
@@ -312,8 +398,13 @@ function Actions({
         <Icon.check size={18} />
         <span>{does === "seen" ? "Seen" : "Approve"}</span>
       </button>
-      <button type="button" className="review-act review-act-answer" onClick={() => onAnswer(card)} title="Answer it (Shift+→)">
-        <span>{card.kind === "decision" ? "Answer" : "Respond"}</span>
+      <button
+        type="button"
+        className="review-act review-act-answer"
+        onClick={() => onAnswer(card)}
+        title={card.kind === "merged" ? `Have a session write one page that catches you up on all ${merged} merged PRs (Shift+→)` : "Answer it (Shift+→)"}
+      >
+        <span>{card.kind === "decision" ? "Answer" : card.kind === "merged" ? `Catch me up${merged > 1 ? ` (${merged})` : ""}` : "Respond"}</span>
         <Icon.chevronRight size={18} />
       </button>
     </div>
@@ -480,7 +571,7 @@ function SwipeCard({
       }}
     >
       <span className="card-hint card-hint-right" aria-hidden="true">
-        Answer
+        {card.kind === "merged" ? "Catch me up" : "Answer"}
       </span>
       <span className="card-hint card-hint-left" aria-hidden="true">
         Later
@@ -517,6 +608,7 @@ function LongView({
   onLater,
   onApprove,
   onAnswer,
+  merged,
 }: {
   card: Card;
   state: AppState;
@@ -524,6 +616,7 @@ function LongView({
   onLater: (c: Card) => void;
   onApprove: (c: Card) => void;
   onAnswer: (c: Card) => void;
+  merged: number;
 }) {
   const longRef = useRef<HTMLDivElement>(null);
   const restoreTo = useRef(document.activeElement as HTMLElement | null);
@@ -613,7 +706,7 @@ function LongView({
         ) : null}
       </div>
       </CardLinks>
-      {open ? <Actions card={card} onLater={onLater} onApprove={onApprove} onAnswer={onAnswer} long /> : null}
+      {open ? <Actions card={card} merged={merged} onLater={onLater} onApprove={onApprove} onAnswer={onAnswer} long /> : null}
     </div>
   );
 }
@@ -678,6 +771,41 @@ function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => voi
           </span>
           <Button type="submit" variant="primary" icon={empty && !decision ? Icon.check : Icon.send} disabled={(decision && empty) || images.uploading}>
             {empty && !decision ? "Seen" : "Send"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** What a right swipe on a merged card opens: one go for all of them, said before it is done. */
+function CatchUpSheet({ cards, onClose, onStart }: { cards: Card[]; onClose: () => void; onStart: (cards: Card[]) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const n = cards.length;
+  return (
+    <Modal title="Catch me up" hint={`${n} merged PR${n === 1 ? "" : "s"}`} onClose={onClose}>
+      <form
+        className="review-answer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (busy || !n) return;
+          setBusy(true);
+          setError(null);
+          onStart(cards).catch((e: Error) => {
+            setError(e.message);
+            setBusy(false);
+          });
+        }}
+      >
+        <p>
+          A new Claude session reads {n === 1 ? "this merged card" : `all ${n} merged cards`} and the PRs behind them, and writes you one page that teaches what changed in the system. When the page is done it comes back here as a card that opens it.
+        </p>
+        <p className="faint">{n === 1 ? "The card is" : `All ${n} are`} marked seen now.</p>
+        <div className="review-answer-foot">
+          <span className="faint review-answer-note">{error ? <span className="error">{error}</span> : null}</span>
+          <Button type="submit" variant="primary" icon={Icon.send} disabled={busy || !n} autoFocus>
+            {busy ? "Starting…" : "Start"}
           </Button>
         </div>
       </form>
