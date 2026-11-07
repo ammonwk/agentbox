@@ -31,7 +31,7 @@ import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 import { countSlugs, mostNamed, prReposIn } from "../prrepo";
 import { askQuestionsOf } from "./ask";
-import { clip, goOutOfFunds, ompErrorKind, refusesTheRoute, toolSummary } from "./omp-transcript";
+import { clip, goOutOfFunds, ompErrorKind, refusesTheRoute, toolSummary, UNPAID_ACCOUNT } from "./omp-transcript";
 import type { OpencodeChildRow, OpencodeMessageRow, OpencodeSessionRow } from "./opencode-db";
 
 const PROMPT_CAP = 2000;
@@ -185,10 +185,10 @@ export function summarize(row: OpencodeMessageRow, ver: number): RowSummary {
 }
 
 /** A limit the provider refused on, rather than a fault: 429s and quota
- *  errors, and an OpenCode Go account out of funds (`goOutOfFunds`), but not
+ *  errors, and an OpenCode Go account that cannot pay (`goOutOfFunds`), but not
  *  another provider's prepaid funds running out, which no wait fixes. */
 function isLimit(e: NonNullable<RowSummary["error"]>, provider: string | null): boolean {
-  if (/insufficient (account )?(funds|balance|credits)/i.test(e.message)) return goOutOfFunds(provider, e.message);
+  if (UNPAID_ACCOUNT.test(e.message)) return goOutOfFunds(provider, e.message);
   if (e.type === "provider.quota" || e.status === 429) return true;
   return /rate.?limit|usage limit|quota|too many requests|FreeUsageLimitError/i.test(e.message);
 }

@@ -2912,8 +2912,17 @@ export class Fleet extends EventEmitter {
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
           auth: this.deps.usage.authOf?.(a.id),
-          // A free model's limit is the model's, not the account's plan.
-          stopped: stoppedSince(hits.filter((h) => h.accountId === a.id && !isFree(h.detail.split(": ")[0])), this.now(), usage ?? undefined, model),
+          // A free model's limit is the model's, not the account's plan; a
+          // refused login is a stop of its own, no session needing to die on it.
+          stopped: stoppedSince(
+            [
+              ...hits.filter((h) => h.accountId === a.id && !isFree(h.detail.split(": ")[0])),
+              ...(usage?.refusedAt ? [{ at: usage.refusedAt, detail: usage.stale ?? "its login was refused" }] : []),
+            ],
+            this.now(),
+            usage ?? undefined,
+            model,
+          ),
           refused: refused.get(a.id) ?? null,
         };
       });

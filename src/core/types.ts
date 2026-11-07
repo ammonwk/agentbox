@@ -127,6 +127,10 @@ export interface AccountUsage {
   source: "endpoint" | "cache" | "rollout" | "cli" | "none";
   /** Anything else worth a line: extra-usage state, a locked reason. */
   notes: string[];
+  /** When the provider last refused this login in a way its sessions are
+   *  refused too (Go: no subscription, sign-in refused); an answered reading
+   *  clears it. */
+  refusedAt?: number | null;
   /** Codex: the account's credit balance and its recent spend. Absent for
    *  every other provider. */
   credits?: CreditBalance | null;

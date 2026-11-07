@@ -198,13 +198,17 @@ function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: unknown }
   return /rate.?limit|usage limit|quota|too many requests|FreeUsageLimitError/i.test(m);
 }
 
+/** An account turned away for want of money: an empty balance, or (Go) a
+ *  workspace with no subscription. */
+export const UNPAID_ACCOUNT = /insufficient (account )?(funds|balance|credits)|active OpenCode Go subscription is required/i;
+
 /**
- * An OpenCode Go account out of funds. Elsewhere that is fatal (no wait fixes
- * it), but each Go key is an account of its own, so for Go it is that
+ * An OpenCode Go account that cannot pay. Elsewhere that is fatal (no wait
+ * fixes it), but each Go key is an account of its own, so for Go it is that
  * account's limit: the session can go on on another key.
  */
 export function goOutOfFunds(provider: unknown, message: unknown): boolean {
-  return typeof provider === "string" && provider.startsWith("opencode-go") && typeof message === "string" && /insufficient (account )?(funds|balance|credits)/i.test(message);
+  return typeof provider === "string" && provider.startsWith("opencode-go") && typeof message === "string" && UNPAID_ACCOUNT.test(message);
 }
 
 /**

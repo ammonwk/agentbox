@@ -65,7 +65,7 @@ export type Reading =
   | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null; credits?: CreditReading | null }
   /** We chose not to ask (token expired, scope missing, not logged in). */
   | { kind: "skip"; stale: string }
-  | { kind: "error"; stale: string; rateLimited?: boolean; retryAfterMs?: number | null; unauthorized?: boolean };
+  | { kind: "error"; stale: string; rateLimited?: boolean; retryAfterMs?: number | null; unauthorized?: boolean; sessionsRefused?: boolean };
 
 export interface UsageDeps {
   fetch: typeof fetch;
@@ -627,7 +627,8 @@ async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading>
   if (res.status === 401 || res.status === 403) {
     await res.arrayBuffer().catch(() => undefined);
     const stale = res.status === 403 ? "no OpenCode Go subscription in this workspace" : "sign-in refused — log the account in again";
-    return { kind: "error", stale, unauthorized: true };
+    // The bridge has already refreshed this credential, and sessions run on it.
+    return { kind: "error", stale, unauthorized: true, sessionsRefused: true };
   }
   if (!res.ok) return httpError(res, "OpenCode Go usage", now);
   let body: unknown;
@@ -933,7 +934,8 @@ export class UsageService extends EventEmitter {
     } else if (r.unauthorized) {
       st.nextAt = now + 15 * MIN;
       st.credMtimeAtFailure = mtimeOf(credentialsPath(account.provider, account.home)) ?? -1;
-      this.markStale(account.id, r.stale);
+      if (r.sessionsRefused) this.store({ ...this.get(account.id), stale: r.stale, refusedAt: now });
+      else this.markStale(account.id, r.stale);
     } else {
       st.nextAt = now + Math.min(30 * MIN, interval * 2 ** (st.failures - 1));
       this.markStale(account.id, r.stale);
