@@ -31,7 +31,7 @@ import type { Card, CardKind, CardState } from "./types";
 
 export const CARD_KINDS: readonly CardKind[] = ["decision", "merged", "note"];
 /** How long an answer waits before it is typed into the session: the undo. */
-export const UNDO_MS = 8_000;
+const UNDO_MS = 8_000;
 /** New decisions inside this long are one push. */
 const PUSH_BATCH_MS = 20_000;
 /** How many answered and withdrawn cards the app is sent; the rest are in the database. */

@@ -24,7 +24,7 @@ export type ComposerMode =
   | { kind: "adopt" }
   | { kind: "subagent" };
 
-export function composerMode(s: Pick<Session, "host" | "status">): ComposerMode {
+function composerMode(s: Pick<Session, "host" | "status">): ComposerMode {
   if (s.host === "external") return { kind: "adopt" };
   if (s.host === "subagent") return { kind: "subagent" };
   return { kind: "send" };

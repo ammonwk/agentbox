@@ -46,7 +46,7 @@ export interface Place {
  */
 const toplevels = new Map<string, string | null>();
 
-export function toplevelOf(path: string): string | null {
+function toplevelOf(path: string): string | null {
   const hit = toplevels.get(path);
   if (hit !== undefined) return hit;
   const r = run(["git", "rev-parse", "--show-toplevel"], path);
@@ -97,7 +97,7 @@ export function shortPlace(p: Place): string {
  * inside. Compares with a trailing separator so `/a/bcd` cannot pass as living
  * under `/a/bc`.
  */
-export function containedIn(candidate: string, roots: string[]): string | null {
+function containedIn(candidate: string, roots: string[]): string | null {
   if (!candidate || typeof candidate !== "string") return null;
   if (candidate.includes("\0")) return null;
 

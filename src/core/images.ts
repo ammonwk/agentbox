@@ -12,7 +12,7 @@
 import { closeSync, openSync, readSync } from "node:fs";
 import { resolveLocal } from "./files";
 
-export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 
 /** The first bytes of each type an agent can show. */
 const MAGIC: { mime: string; test: (b: Uint8Array) => boolean }[] = [

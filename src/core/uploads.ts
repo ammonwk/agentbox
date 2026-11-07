@@ -24,7 +24,7 @@ const TYPES: Record<string, string> = {
 const MIME = Object.fromEntries(Object.entries(TYPES).map(([m, e]) => [e, m]));
 const NAME = /^\d{8}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/;
 
-export const uploadsRoot = (): string => join(agentboxHome(), "uploads");
+const uploadsRoot = (): string => join(agentboxHome(), "uploads");
 
 export function saveUpload(bytes: Uint8Array, mime: string): { name: string; path: string } {
   const ext = TYPES[mime.split(";")[0]!.trim().toLowerCase()];

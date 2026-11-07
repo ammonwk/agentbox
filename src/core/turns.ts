@@ -25,7 +25,7 @@ const TEXT_CAP = 600;
 const FULL_PAGE = 1000;
 
 /** The rail's view of one event, or null when it is not something you said. */
-export function turnOf(ev: TimelineEvent, seq: number): Turn | null {
+function turnOf(ev: TimelineEvent, seq: number): Turn | null {
   if (ev.kind === "user") {
     const sent = readSent(ev.text.trim());
     const raw = dropPasteTags(sent.text).trim();
@@ -59,7 +59,7 @@ function questionsOf(input: string | undefined): string[] | null {
  * devin's reads `User answered your questions:` and a JSON object, which
  * `devinAskAnswers` parses. Anything else is shown as it came.
  */
-export function answerText(questions: readonly string[], output: string): string {
+function answerText(questions: readonly string[], output: string): string {
   const json = devinAskAnswers(output);
   if (json) {
     const out = questions.map((q) => (json[q] !== undefined ? `${q}\n→ ${json[q]}` : null)).filter((x): x is string => x !== null);

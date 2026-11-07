@@ -331,8 +331,7 @@ export class AccountsService extends EventEmitter {
   }
 }
 
-export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, owners, resyncShared } from "./homes";
-export { identify } from "./identity";
+export { owners } from "./homes";
 export { UsageService } from "./usage";
-export type { ResetConsumeResult, ResetOutcome } from "./usage";
+export type { ResetConsumeResult } from "./usage";
 export { LoginManager } from "./login";

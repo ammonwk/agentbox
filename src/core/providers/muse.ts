@@ -17,7 +17,7 @@ import type { Command, LiveProcess, ProviderAdapter, TranscriptRef } from "./typ
 type Home = Pick<Account, "home" | "isDefault">;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const configHome = () => process.env.XDG_CONFIG_HOME || join(userHome(), ".config");
-export function museDataHome(account: Home): string {
+function museDataHome(account: Home): string {
   return account.isDefault ? process.env.XDG_DATA_HOME || join(userHome(), ".local", "share") : join(account.home, "data");
 }
 const sessionRoot = (account: Home) => join(museDataHome(account), "muse", "sessions");
@@ -66,7 +66,7 @@ function transcripts(account: Account, since: number, id?: string): TranscriptRe
 }
 
 /** The launcher execs a versioned native binary (`muse-bin-1.3.0-R…`). */
-export function isMuseArgv(argv: string[]): boolean {
+function isMuseArgv(argv: string[]): boolean {
   const name = basename(argv[0] ?? "");
   return name === "muse" || /^muse-bin-\d/.test(name);
 }

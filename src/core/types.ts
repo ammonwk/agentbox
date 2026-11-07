@@ -8,9 +8,7 @@
  */
 
 import type { ScheduleRule } from "./schedule";
-export type { ScheduleRule };
 import type { UserIdentity } from "./user";
-export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
@@ -875,7 +873,7 @@ export interface TimelinePage {
 
 // ----------------------------------------------------------------- logins
 
-export type LoginState = "starting" | "awaiting-user" | "verifying" | "done" | "failed";
+type LoginState = "starting" | "awaiting-user" | "verifying" | "done" | "failed";
 
 export interface LoginFlow {
   id: string;

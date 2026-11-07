@@ -60,11 +60,10 @@ import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
 import { noteServerBehind, noteServerBuild } from "./lib/update";
 
-export type { SessionRow } from "./lib/board";
-export type { DepState, DepStatus, Health, LoadDetail, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
+export type { DepState, Health, LoadDetail, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
 import type { AgentTimeline, SessionWork } from "../../src/core/work";
 import type { FileView } from "../../src/core/files";
-export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
+export type { AgentTimeline, SessionWork } from "../../src/core/work";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -118,7 +117,7 @@ const get = <T,>(path: string) => request<T>("GET", path);
 const post = <T,>(path: string, body?: unknown) => request<T>("POST", path, body);
 const enc = encodeURIComponent;
 
-export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type SettingsPatch = DeepPartial<AgentSettings>;
 export type RepoPatch = Partial<Pick<Repo, "worktreeDefault" | "setup">>;
 
@@ -140,7 +139,7 @@ export interface NewSessionInput {
 }
 
 /** An image saved for a prompt to name: agents read it from `path`. */
-export interface Upload {
+interface Upload {
   name: string;
   path: string;
 }
@@ -763,9 +762,9 @@ export function useMetrics(): { metrics: MetricsState | null; stale: boolean } {
 // ---------------------------------------------------------------- timeline
 
 /** Events per older-page fetch: one screenful of history, not the whole log. */
-export const OLDER_PAGE = 100;
+const OLDER_PAGE = 100;
 
-export interface TimelineState {
+interface TimelineState {
   events: readonly TimelineEvent[];
   /** The first page has arrived. Before it, "empty" means "not yet". */
   ready: boolean;

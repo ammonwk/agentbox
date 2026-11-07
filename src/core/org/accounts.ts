@@ -247,7 +247,7 @@ const pendingPath = (id: string): string => join(orgAccountsRoot(), `${id}.pendi
 /** A login's name on every machine: one email for claude and codex, one
  *  OpenCode account in one workspace for omp (an email can hold several,
  *  each its own sign-in). */
-export function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
+function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
   if (a.provider === "omp") {
     const l = readGoLogin(a.home);
     return l?.accountID ? `omp:${l.accountID}:${l.orgID ?? ""}` : null;
@@ -255,7 +255,7 @@ export function loginKey(a: Pick<Account, "provider" | "email" | "home">): strin
   return a.email ? `${a.provider}:${a.email.toLowerCase()}` : null;
 }
 
-export const storeKey = (d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null =>
+const storeKey = (d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null =>
   d.provider === "omp" ? (d.externalId ? `omp:${d.externalId}` : null) : d.email ? `${d.provider}:${d.email}` : null;
 
 /** Every home here of a login the store keeps: each of yours logged in as

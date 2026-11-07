@@ -28,7 +28,7 @@ export function macServiceInstalled(): boolean {
 /** A login shell supplies the same PATH and tool setup as a terminal. Only
  * agentbox's configuration is written here, never credentials or session IDs.
  * AbandonProcessGroup keeps tmux/agents alive across server restarts. */
-export function macServiceText(): string {
+function macServiceText(): string {
   const env: Record<string, string> = { AGENTBOX_HOME: agentboxHome() };
   for (const name of ["AGENTBOX_PORT", "AGENTBOX_HOST", "AGENTBOX_TAILNET", "AGENTBOX_TMUX_SOCKET"]) {
     if (process.env[name] !== undefined) env[name] = process.env[name]!;

@@ -15,14 +15,8 @@ export const PROMPT_PREVIEW = 500;
 
 /** What `agentbox send` puts before a message an agent sends. The sender's
  *  agentbox id follows `from` when it is known (`AGENTBOX_SESSION`). */
-export const AGENT_SENT_MARK = "[via agentbox send]";
+const AGENT_SENT_MARK = "[via agentbox send]";
 export const agentSentMark = (from?: string | null): string => (from ? `[via agentbox send from ${from}]` : AGENT_SENT_MARK);
-/** What a schedule that keeps to one session puts before each note it types
- *  into it (src/core/scheduler.ts): not you, and not another session. */
-export const scheduleSentMark = (scheduleId: string): string => `[via agentbox schedule ${scheduleId}]`;
-/** What an extension's program puts before a message it types into a session
- *  (docs/extensions.md): not you, and not another session. */
-export const extSentMark = (name: string): string => `[via agentbox ext ${name}]`;
 
 // The removed Project session signed its messages `[Project session]`; old
 // transcripts still carry that form.

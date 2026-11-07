@@ -41,7 +41,7 @@ const FIVE_HOURS = 5 * HOUR;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
-export const POLL_MS: Record<AccountProvider, number> = {
+const POLL_MS: Record<AccountProvider, number> = {
   claude: 3 * MIN,
   codex: 5 * MIN,
   devin: 10 * MIN,
@@ -75,14 +75,14 @@ export interface UsageDeps {
   version: (p: ProviderId) => Promise<string | null>;
 }
 
-export const defaultDeps = (): UsageDeps => ({
+const defaultDeps = (): UsageDeps => ({
   fetch: globalThis.fetch.bind(globalThis),
   exec: defaultExec,
   now: Date.now,
   version: async (p) => (await detectCli(p)).version,
 });
 
-export function emptyUsage(accountId: string): AccountUsage {
+function emptyUsage(accountId: string): AccountUsage {
   return { accountId, at: null, windows: [], stale: null, source: "none", notes: [] };
 }
 
@@ -106,7 +106,7 @@ function isoMs(v: unknown): number | null {
 
 const clampPct = (n: number) => Math.min(100, Math.max(0, n));
 
-export function kindForDuration(ms: number): WindowKind {
+function kindForDuration(ms: number): WindowKind {
   if (ms <= 12 * HOUR) return "short";
   if (ms <= 2 * DAY) return "daily";
   if (ms <= 8 * DAY) return "weekly";
@@ -114,13 +114,13 @@ export function kindForDuration(ms: number): WindowKind {
 }
 
 /** "14:02" in local time, for stale messages a human reads. */
-export function hhmm(ms: number): string {
+function hhmm(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /** Retry-After as delta-seconds or an HTTP date. */
-export function parseRetryAfter(v: string | null, now: number): number | null {
+function parseRetryAfter(v: string | null, now: number): number | null {
   if (!v?.trim()) return null;
   const s = Number(v);
   if (Number.isFinite(s)) return Math.max(0, s * 1000);
@@ -158,7 +158,7 @@ function networkError(err: unknown, what: string): Reading {
  * scoped limit names the same model. `is_active` is ignored: it marks the one
  * limit currently binding, not which limits exist.
  */
-export function mapClaudeUsage(body: unknown): { windows: UsageWindow[]; notes: string[] } {
+function mapClaudeUsage(body: unknown): { windows: UsageWindow[]; notes: string[] } {
   const b = rec(body) ?? {};
   const windows: UsageWindow[] = [];
   const notes: string[] = [];
@@ -217,7 +217,7 @@ function claudeUA(version: string | null): string {
   return `claude-cli/${version ?? "2.1.0"} (external, cli)`;
 }
 
-export async function fetchClaudeUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
+async function fetchClaudeUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
   const cred = readClaudeCredentials(account.home);
   if (!cred?.accessToken) return { kind: "skip", stale: "not logged in" };
   const now = deps.now();
@@ -265,7 +265,7 @@ export async function fetchClaudeUsage(account: Pick<Account, "home">, deps: Usa
  * `accountUuid` check stops a cache written before a re-login to a different
  * account being attributed to the new one.
  */
-export function readClaudeUsageCache(account: Pick<Account, "home" | "isDefault">): Reading | null {
+function readClaudeUsageCache(account: Pick<Account, "home" | "isDefault">): Reading | null {
   const cj = readClaudeJson(claudeJsonPath(account))?.value;
   const c = rec(cj?.cachedUsageUtilization);
   if (!c) return null;
@@ -317,7 +317,7 @@ function codexWindow(w: unknown, now: number, prefix?: { id: string; label: stri
  * (e.g. a Spark model) and become model-scoped windows. The same body carries
  * the reset-credit count (`rate_limit_reset_credits`).
  */
-export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null; resets: ResetCredits | null; credits: CreditReading | null } {
+function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null; resets: ResetCredits | null; credits: CreditReading | null } {
   const b = rec(body) ?? {};
   const windows: UsageWindow[] = [];
   const notes: string[] = [];
@@ -351,7 +351,7 @@ export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindo
 
 /** `GET /wham/rate-limit-reset-credits` → the credits themselves. Timestamps
  *  arrive RFC3339; a missing one is null, not a parse failure. */
-export function mapCodexResetCredits(body: unknown): ResetCredit[] {
+function mapCodexResetCredits(body: unknown): ResetCredit[] {
   const b = rec(body);
   const list = b && Array.isArray(b.credits) ? (b.credits as unknown[]) : [];
   const out: ResetCredit[] = [];
@@ -414,7 +414,7 @@ async function enrichCodexResets(count: ResetCredits | null, headers: Record<str
   return { ...count, credits: mapCodexResetCredits(body) };
 }
 
-export async function fetchCodexUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
+async function fetchCodexUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
   const auth = readCodexAuth(account.home);
   if (!auth || auth.mode === "none") return { kind: "skip", stale: "not logged in" };
   if (auth.mode === "apikey" || !auth.accessToken) return { kind: "skip", stale: "API-key login has no subscription windows" };
@@ -442,7 +442,7 @@ export async function fetchCodexUsage(account: Pick<Account, "home">, deps: Usag
   return { kind: "ok", at, windows, notes, source: "endpoint", credits, resets: await enrichCodexResets(resets, headers, deps) };
 }
 
-export type { ResetOutcome, ResetConsumeResult } from "../types";
+export type { ResetConsumeResult } from "../types";
 
 /**
  * Spend one Codex usage-limit reset — the CLI's `/usage` → "Full reset".
@@ -450,7 +450,7 @@ export type { ResetOutcome, ResetConsumeResult } from "../types";
  * applies to a window that is spent right now. The request carries a fresh
  * idempotency key (`redeem_request_id`), so a dropped answer cannot spend two.
  */
-export async function consumeCodexResetCredit(
+async function consumeCodexResetCredit(
   account: Pick<Account, "home">,
   deps: UsageDeps,
   creditId?: string | null,
@@ -508,7 +508,7 @@ export async function consumeCodexResetCredit(
  * `hideDailyQuota` plans (Devin's own UI hides the daily meter) get no daily
  * window.
  */
-export function mapDevinUserStatus(body: unknown): { windows: UsageWindow[]; notes: string[]; email: string | null; plan: string | null } {
+function mapDevinUserStatus(body: unknown): { windows: UsageWindow[]; notes: string[]; email: string | null; plan: string | null } {
   const us = rec(rec(body)?.userStatus);
   const ps = rec(us?.planStatus);
   const info = rec(ps?.planInfo);
@@ -538,7 +538,7 @@ export function mapDevinUserStatus(body: unknown): { windows: UsageWindow[]; not
   };
 }
 
-export async function fetchDevinUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
+async function fetchDevinUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
   const cred = readDevinCredentials(account.home);
   if (!cred?.apiKey) return { kind: "skip", stale: "not logged in" };
   const server = (cred.apiServerUrl || "https://server.codeium.com").replace(/\/+$/, "");
@@ -595,7 +595,7 @@ const GO_WINDOWS: readonly { key: string; id: string; label: string; kind: Windo
  * with nothing in it is reported as ending five hours from now, which is no
  * reset at all.
  */
-export function mapGoUsage(body: unknown, now: number): UsageWindow[] {
+function mapGoUsage(body: unknown, now: number): UsageWindow[] {
   const usage = rec(rec(body)?.usage) ?? {};
   const windows: UsageWindow[] = [];
   for (const g of GO_WINDOWS) {
@@ -662,7 +662,7 @@ function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
  * older than the last row (a stale cache read after an endpoint call) is never
  * written: it would make the series go backwards.
  */
-export function shouldSample(last: UsageSampleRow | null, w: UsageWindow, at: number): boolean {
+function shouldSample(last: UsageSampleRow | null, w: UsageWindow, at: number): boolean {
   if (!last) return true;
   if (at <= last.at) return false;
   if (Math.abs(last.usedPct - w.usedPct) > 1e-6) return true;
@@ -680,7 +680,7 @@ const CREDIT_SPAN_MS = 7 * DAY;
 /** Credits spent across a run of balances: every fall below the lowest
  *  balance since the last top-up. A top-up starts a new floor rather than
  *  counting as negative spend. */
-export function creditsSpent(balances: number[]): number {
+function creditsSpent(balances: number[]): number {
   let floor = balances[0] ?? 0;
   let spent = 0;
   for (const b of balances) {
@@ -694,7 +694,7 @@ export function creditsSpent(balances: number[]): number {
 
 /** Keep a balance reading (one per ten minutes, and every top-up), then say
  *  what the last week spent of it. */
-export function creditBalance(chatgptAccount: string, at: number, balance: CreditReading): CreditBalance {
+function creditBalance(chatgptAccount: string, at: number, balance: CreditReading): CreditBalance {
   if (balance === "unlimited") return { balance, perDay: null, spanDays: 0 };
   const since = at - CREDIT_SPAN_MS;
   const samples = creditSamplesSince(chatgptAccount, since);
@@ -710,7 +710,7 @@ export function creditBalance(chatgptAccount: string, at: number, balance: Credi
   };
 }
 
-export function recordSamples(accountId: string, at: number, windows: UsageWindow[], source: string): number {
+function recordSamples(accountId: string, at: number, windows: UsageWindow[], source: string): number {
   let n = 0;
   for (const w of windows) {
     if (!shouldSample(lastUsageSample(accountId, w.id), w, at)) continue;

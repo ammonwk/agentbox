@@ -132,7 +132,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
 const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** One argument is a shell command line; several are an argv, each quoted, so `bash -c '<script>'` reaches sh whole. */
-export const commandLine = (argv: string[]): string => (argv.length === 1 ? argv[0]! : argv.map(shq).join(" "));
+const commandLine = (argv: string[]): string => (argv.length === 1 ? argv[0]! : argv.map(shq).join(" "));
 
 const stopCommand = (spec: Extract<WaitSpec, { kind: "job" }>) => isLaunchdJob(spec.unit) ? `launchctl bootout ${spec.unit}` : `systemctl --user stop ${spec.unit}`;
 const jobEvidence = (spec: Extract<WaitSpec, { kind: "job" }>) => `Output: ${spec.log}; result: ${spec.result}; stop with: ${stopCommand(spec)}`;
@@ -215,7 +215,7 @@ export async function unwait(api: Api, args: string[]): Promise<number> {
 }
 
 /** `id  session  state  what · detail`: one line per wait. */
-export function line(w: Wait, now = Date.now()): string {
+function line(w: Wait, now = Date.now()): string {
   const state = !w.ended ? "armed" : w.ended === "cancelled" ? "cancelled" : w.toldAt ? `${w.ended}, told` : `${w.ended}, NOT TOLD`;
   const detail = !w.ended
     ? `${w.seen ?? "not looked at yet"}${w.checkedAt ? ` (${span(now - w.checkedAt)} ago)` : ""} · times out in ${span(w.deadline - now)}`

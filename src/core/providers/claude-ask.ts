@@ -76,7 +76,7 @@ function lastIndex(lines: string[], test: (l: string) => boolean): number {
 }
 
 /** The dialog on screen, or null when there is none. */
-export function readAskScreen(raw: string): QuestionScreen | ReviewScreen | null {
+function readAskScreen(raw: string): QuestionScreen | ReviewScreen | null {
   const lines = plainScreen(raw).split("\n").map((l) => l.replace(/\s+$/, ""));
   const flat = norm(lines.join(" "));
 

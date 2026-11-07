@@ -45,11 +45,11 @@ const RECORD_SIZE = 4096;
 
 const enc = new TextEncoder();
 
-export function b64url(bytes: Uint8Array): string {
+function b64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
 }
 
-export function unb64url(s: string): Uint8Array<ArrayBuffer> {
+function unb64url(s: string): Uint8Array<ArrayBuffer> {
   return new Uint8Array(Buffer.from(s, "base64url"));
 }
 
@@ -69,7 +69,7 @@ async function hkdf(salt: Uint8Array<ArrayBuffer>, ikm: Uint8Array<ArrayBuffer>,
 }
 
 /** A message sealed for one subscription: the body of the POST to its endpoint. */
-export async function encryptPush(sub: Pick<PushSubscription, "keys">, plaintext: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+async function encryptPush(sub: Pick<PushSubscription, "keys">, plaintext: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
   const uaPublic = unb64url(sub.keys.p256dh);
   const authSecret = unb64url(sub.keys.auth);
   const uaKey = await crypto.subtle.importKey("raw", uaPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
@@ -208,7 +208,7 @@ export async function pushToAll(msg: PushMessage): Promise<{ sent: number; faile
  * session that skips them — or a screen caught half-drawn is blocked for a
  * pass or two at most, and a notification cannot be taken back.
  */
-export const PUSH_HOLD_MS = 5_000;
+const PUSH_HOLD_MS = 5_000;
 /** All Claude says of a panel you opened in its terminal (/model, /config):
  *  a dialog to Claude, and nothing the screen check knows as a prompt. */
 const OWN_PANEL = "dialog open";
@@ -248,7 +248,7 @@ export function notifyBlocked(board: () => readonly Session[], reasonOf: (id: st
 
 /** What `notifyBlocked` sends for this board: one message per session newly
  *  blocked on you, and when the next block still held comes due. */
-export function blockedNews(
+function blockedNews(
   sessions: readonly Session[],
   reasonOf: (id: string) => string | null,
   typedAt: (id: string) => number = () => 0,

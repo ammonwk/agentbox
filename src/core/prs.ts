@@ -143,7 +143,7 @@ export function prWarnings(): string[] {
 const errors = new Map<string, string>();
 
 /** A stretch of GitHub not answering, measured in time the machine was awake. */
-export class Outage {
+class Outage {
   /** The stretch's first failed try, and its latest; null while GitHub answers. */
   private since: number | null = null;
   private at = 0;

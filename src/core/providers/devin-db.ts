@@ -191,9 +191,3 @@ export function setAgentMode(path: string, id: string, mode: string): boolean {
     db.close();
   }
 }
-
-/** For tests: drop cached handles so a fixture can be deleted. */
-export function closeDevinDbs(): void {
-  for (const h of handles.values()) h.db.close();
-  handles.clear();
-}

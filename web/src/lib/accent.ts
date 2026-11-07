@@ -9,7 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export const ACCENT_KEY = "agentbox.accent";
+const ACCENT_KEY = "agentbox.accent";
 
 export interface AccentPreset {
   id: string;

@@ -57,7 +57,7 @@ export function priceOf(model: string | null | undefined): Price {
 }
 
 /** Cost-equivalent of a batch of tokens on one model. */
-export function costEquiv(
+function costEquiv(
   model: string | null | undefined,
   t: { input: number; output: number; cacheRead: number; cacheWrite: number },
 ): number {

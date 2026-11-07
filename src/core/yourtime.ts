@@ -57,10 +57,10 @@ import { getDb } from "./db";
 import { userSaidSince } from "./search";
 import { readSent, splitPastes, withoutNotes } from "./sent";
 
-export type YourActKind = "message" | "card" | "mfa" | "login";
-export const YOUR_ACT_KINDS: readonly YourActKind[] = ["message", "card", "mfa", "login"];
+type YourActKind = "message" | "card" | "mfa" | "login";
+const YOUR_ACT_KINDS: readonly YourActKind[] = ["message", "card", "mfa", "login"];
 
-export interface YourAct {
+interface YourAct {
   at: number;
   kind: YourActKind;
   /** Characters you typed for it, for its cost. */
@@ -69,7 +69,7 @@ export interface YourAct {
   asked: boolean;
 }
 
-export interface YourDay {
+interface YourDay {
   /** `YYYY-MM-DD` in `timezone`. */
   day: string;
   counts: Record<YourActKind, number>;
@@ -87,12 +87,12 @@ export interface YourTime {
 }
 
 const MIN = 60_000;
-export const GAP_MS = 8 * MIN;
+const GAP_MS = 8 * MIN;
 /** 40 words a minute, at six characters a word with its space. */
 const TYPED_PER_MIN = 240;
 const MFA = /^\d{6}$/;
 
-export function costMs(a: YourAct): number {
+function costMs(a: YourAct): number {
   if (a.kind === "mfa") return MIN / 2;
   if (a.kind === "login") return 2 * MIN;
   return Math.min(10 * MIN, MIN + (a.typed / TYPED_PER_MIN) * MIN);
@@ -118,7 +118,7 @@ function covered(list: readonly YourAct[]): number {
 }
 
 /** Pure: the acts, grouped into the `days` local days that end today. */
-export function foldYourTime(acts: readonly YourAct[], days: number, timezone: string, now: number): YourTime {
+function foldYourTime(acts: readonly YourAct[], days: number, timezone: string, now: number): YourTime {
   const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" });
   const key = (t: number): string => dayOf.format(t);
   // Counted back on the calendar, not in 24-hour steps, which a 23-hour day would skip.
@@ -147,7 +147,7 @@ function typedIn(text: string): number {
 
 /** A message as one of your acts, or null when it is not yours to count;
  *  `yours` when it went to a session you started. */
-export function messageAct(raw: string, at: number, yours: boolean): YourAct | null {
+function messageAct(raw: string, at: number, yours: boolean): YourAct | null {
   const sent = readSent(raw);
   if (sent.agent) return null;
   const text = withoutNotes(sent.text).trim();
@@ -166,7 +166,7 @@ export function recordYourAct(kind: RecordedAct, sessionId: string | null, at = 
 }
 
 /** Every act since `since`. */
-export function yourActs(since: number): YourAct[] {
+function yourActs(since: number): YourAct[] {
   const db = getDb();
   // A subagent's or a script's CLI is not started by agentbox: those are external.
   const started = new Map((db.query("SELECT id, provider FROM sessions WHERE origin = 'agentbox'").all() as { id: string; provider: string }[]).map((r) => [r.id, r.provider]));

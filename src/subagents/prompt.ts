@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 /** The subagent contract, beside this file and resolved from it rather than
  *  the cwd — the MCP server is started from wherever its client happens to be.
  *  Content, edited more often than code, so it is a file and not a literal. */
-export const SUBAGENT_PROMPT = fileURLToPath(new URL("./prompt.md", import.meta.url));
+const SUBAGENT_PROMPT = fileURLToPath(new URL("./prompt.md", import.meta.url));
 
 /**
  * The contract handed to an MCP subagent: that its final message is its whole

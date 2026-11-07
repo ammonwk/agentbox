@@ -213,7 +213,7 @@ function isClaudeCode(pid: number, argv: string[]): boolean {
 }
 
 /** The session a claude argv names, when it can be told from argv alone. */
-export function sessionIdFromArgv(argv: string[]): string | null {
+function sessionIdFromArgv(argv: string[]): string | null {
   const fork = argv.includes("--fork-session");
   let sid: string | null = null;
   let resumed: string | null = null;
@@ -329,7 +329,7 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
  * helper before the session starts) — a new decision even in bypass mode, not
  * the one you made — and the resume-from-summary choice.
  */
-export function claudeAutoAnswer(raw: string, ctx: { bypassPermissions: boolean } = { bypassPermissions: false }): string[] | null {
+function claudeAutoAnswer(raw: string, ctx: { bypassPermissions: boolean } = { bypassPermissions: false }): string[] | null {
   const s = plainScreen(raw);
   if (/Quick safety check|Accessing workspace/.test(s) && /Yes, I trust this folder/.test(s)) {
     if (/adds \d+ director|mint HTTP headers/.test(s)) return null;
@@ -355,7 +355,7 @@ const PERMISSION_QUESTION =
  * footer is the mode line) under it. "Yes" is allowing this once; the "don't
  * ask again" options would write rules to the project's settings.
  */
-export function claudeApprovePrompt(raw: string): string[] | null {
+function claudeApprovePrompt(raw: string): string[] | null {
   if (!claudeBlockedOn(raw)?.startsWith("permission")) return null;
   const lines = plainScreen(raw).trimEnd().split("\n");
   let q = -1;
@@ -416,7 +416,7 @@ const limitDialog = (under: string): boolean => {
 };
 
 /** What a Claude screen is waiting on you for, in a few words. */
-export function claudeBlockedOn(raw: string): string | null {
+function claudeBlockedOn(raw: string): string | null {
   const screen = plainScreen(raw);
   // An error line is history once anything follows it: only the session's
   // last message says it is still stopped there. A teammate's failure is in
@@ -469,7 +469,7 @@ const regexEscape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g
  * the dialog's heading after the rule that set it apart ("Session paused");
  * a dialog without one gets no title.
  */
-export function claudeDialog(raw: string): PromptMenu | null {
+function claudeDialog(raw: string): PromptMenu | null {
   const blocked = claudeBlockedOn(raw);
   // A question has its own card, answered through `/answer`, not by keys.
   if (!blocked || blocked === "asking a question") return null;
@@ -700,7 +700,7 @@ const PROMPTS: PromptFlag[] = [
   { flag: "--system-prompt", file: "--system-prompt-file" },
 ];
 
-export const claudeCarryOver = (argv: string[], where: CarryWhere): string[] =>
+const claudeCarryOver = (argv: string[], where: CarryWhere): string[] =>
   carryFlags(promptFiles(argv, where, PROMPTS), CARRIED);
 
 /**

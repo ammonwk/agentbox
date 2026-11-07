@@ -27,8 +27,8 @@ import { adapterFor } from "./providers";
 import { agentSentMark } from "./sent";
 import type { Session } from "./types";
 
-export const CHATTER_MAX = 3;
-export const CHATTER_WINDOW_MS = 60 * 60_000;
+const CHATTER_MAX = 3;
+const CHATTER_WINDOW_MS = 60 * 60_000;
 
 /** `312k`, `8k`: a context size as the board says it. */
 const size = (tokens: number | null): string => (tokens ? `${Math.max(1, Math.round(tokens / 1000))}k tokens` : "an unknown amount");
@@ -43,7 +43,7 @@ function span(ms: number): string {
  * it runs and its cache is warm, or it is mid-turn (the message joins a turn
  * that is paying for the context anyway).
  */
-export function wakeRefusal(s: Session, now: number): string | null {
+function wakeRefusal(s: Session, now: number): string | null {
   const asleep = s.host === "none";
   // Parked, but its cache outlives the process: a resume reads it back warm.
   const warmResume = asleep && s.status === "waiting" && !!adapterFor(s.provider).parkIdleMs;
@@ -71,7 +71,7 @@ export function wakeRefusal(s: Session, now: number): string | null {
  * does not lift this. Null when it is not at a limit, or nothing says when
  * the limit ends.
  */
-export function limitRefusal(s: Session, now: number): string | null {
+function limitRefusal(s: Session, now: number): string | null {
   const until = s.limitHit?.until;
   if (!until || until <= now) return null;
   const when = new Date(until).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -97,7 +97,7 @@ function recent(key: string, now: number): number[] {
 const pair = (from: string | null, to: string): string => `${from ?? "?"}→${to}`;
 
 /** Why `from` has said enough to `to` for now, or null. */
-export function chatterRefusal(from: string | null, to: string, now: number, max = CHATTER_MAX): string | null {
+function chatterRefusal(from: string | null, to: string, now: number, max = CHATTER_MAX): string | null {
   const times = recent(pair(from, to), now);
   if (times.length < max) return null;
   return (
@@ -108,7 +108,7 @@ export function chatterRefusal(from: string | null, to: string, now: number, max
 }
 
 /** A message from `from` reached `to`. */
-export function countSend(from: string | null, to: string, now: number): void {
+function countSend(from: string | null, to: string, now: number): void {
   sent.set(pair(from, to), [...recent(pair(from, to), now), now]);
 }
 
@@ -117,7 +117,7 @@ export function countSend(from: string | null, to: string, now: number): void {
  * from it) and why it may not, before anything is typed: the one check for
  * an agent's `agentbox send`.
  */
-export function agentRefusal(
+function agentRefusal(
   fleet: Pick<Fleet, "get" | "heir">,
   id: string,
   opts: { from: string | null; wake: boolean },

@@ -20,7 +20,7 @@ export interface GrepJob {
   sessions: { id: string; ref: TranscriptRef }[];
 }
 
-export const MAX_HITS = 5000;
+const MAX_HITS = 5000;
 const PAGE = 1000;
 /** A search is user-facing, not a batch job: four readers at once cuts a
  *  board-wide scan enough without taking the machine the agents run on. */

@@ -66,7 +66,7 @@ const key = (id: string): string => id.toLowerCase().replace(/[^a-z0-9]/g, "");
  * devin does not sell it: the backend then runs its own default, and says
  * so.
  */
-export function devinVariant(model: string, effort: string | null | undefined, families: ModelFamily[] | null): string | null {
+function devinVariant(model: string, effort: string | null | undefined, families: ModelFamily[] | null): string | null {
   if (!families) return null;
   const family = families.find((f) => key(f.uid) === key(model));
   if (!family) return null;

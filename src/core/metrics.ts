@@ -51,8 +51,8 @@ import type { CpuOwner, LoadDetail, MetricsState } from "./types";
 export const metricsEvents = new EventEmitter();
 metricsEvents.setMaxListeners(0);
 
-export const FAST_INTERVAL_MS = 2_000;
-export const SLOW_INTERVAL_MS = 20_000;
+const FAST_INTERVAL_MS = 2_000;
+const SLOW_INTERVAL_MS = 20_000;
 /** The share of the PSS lane's time a sweep may take. */
 const PSS_BUDGET = 0.05;
 

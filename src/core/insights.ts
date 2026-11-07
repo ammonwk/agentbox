@@ -474,7 +474,7 @@ async function scan(account: Pick<Account, "id" | "provider">, homes: string[], 
 
 const PARTS: SpendPart[] = ["input", "write5m", "write1h", "cacheRead", "output"];
 
-export function emptySpend(): Spend {
+function emptySpend(): Spend {
   const z = (): Record<SpendPart, number> => ({ input: 0, write5m: 0, write1h: 0, cacheRead: 0, output: 0 });
   return { calls: 0, tokens: z(), cost: z(), thinking: 0 };
 }

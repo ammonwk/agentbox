@@ -13,7 +13,7 @@ import type { BalancerSettings, CalibrationReport, ForecastReport, Percentiles }
 
 const DAY = 86_400_000;
 
-export function percentiles(values: number[]): Percentiles {
+function percentiles(values: number[]): Percentiles {
   if (values.length === 0) return { p50: null, p75: null, p90: null };
   const sorted = [...values].sort((a, b) => a - b);
   const at = (q: number): number => {

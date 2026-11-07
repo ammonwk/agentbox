@@ -3,7 +3,7 @@ import type { SessionTab } from "../route";
 
 /** Phone widths: the shell trades its rail for a tab bar along the bottom.
  *  Must match the `@media (max-width: 640px)` blocks in the stylesheets. */
-export const PHONE_PX = 640;
+const PHONE_PX = 640;
 
 export function isPhone(): boolean {
   return typeof window !== "undefined" && window.matchMedia(`(max-width: ${PHONE_PX}px)`).matches;

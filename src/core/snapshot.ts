@@ -38,7 +38,7 @@ export function setServesFromCommit(on: boolean): void {
 }
 
 /** True when `root` is the snapshot itself: the server is already there. */
-export function isSnapshot(root: string): boolean {
+function isSnapshot(root: string): boolean {
   const real = (p: string) => (existsSync(p) ? realpathSync(p) : p);
   return real(root) === real(snapshotDir());
 }
@@ -56,14 +56,14 @@ function git(cwd: string, ...args: string[]): string {
   return p.stdout.toString().trim();
 }
 
-export type Synced = { dir: string; commit: string; built: boolean };
+type Synced = { dir: string; commit: string; built: boolean };
 
 /**
  * Move the snapshot to `source`'s HEAD commit and build its UI when `web/`
  * changed. A failed UI build keeps the build that was there; with none there,
  * it throws. Nothing in `source` is touched.
  */
-export function syncSnapshot(source: string, dir = snapshotDir(), log: (line: string) => void = () => {}): Synced {
+function syncSnapshot(source: string, dir = snapshotDir(), log: (line: string) => void = () => {}): Synced {
   const commit = git(source, "rev-parse", "HEAD");
   if (!existsSync(join(dir, ".git"))) {
     if (existsSync(dir)) throw new Error(`${dir} exists and is not a worktree; move it away`);

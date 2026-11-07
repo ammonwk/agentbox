@@ -45,11 +45,11 @@ export function cacheWarmUntil(
 
 /** A session waiting on work that will wake it is sent the keep-warm message
  *  this long before its cache goes cold. */
-export const KEEP_WARM_LEAD_MS = 5 * 60_000;
+const KEEP_WARM_LEAD_MS = 5 * 60_000;
 /** Only a cache that lives at least this long is worth keeping: a message
  *  every few minutes to save a five-minute cache's rewrite costs more in
  *  reads and replies than the rewrite. */
-export const KEEP_WARM_MIN_TTL_MS = 30 * 60_000;
+const KEEP_WARM_MIN_TTL_MS = 30 * 60_000;
 /** At most this many in one wait. Each costs a tenth of what the rewrite it
  *  saves would, plus its reply; a wait that outlasts this many hours is
  *  likely stuck, and is left to go cold. */

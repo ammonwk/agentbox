@@ -27,7 +27,7 @@ import { messageTail } from "../turnstatus";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
-export function projectSlug(cwd: string): string {
+function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
@@ -51,7 +51,7 @@ const LONG_CONTEXT = /\[1m\]|fable|mythos|opus-[5-9]|opus-4-[6-9]|sonnet-[5-9]/i
  * nothing); then the high-water mark — a session holding 700K is self-evidently
  * not on a 200K window.
  */
-export function contextLimitFor(model: string | null, observedMax: number, autoCompactPre: number): number {
+function contextLimitFor(model: string | null, observedMax: number, autoCompactPre: number): number {
   if (model && LONG_CONTEXT.test(model)) return LONG_LIMIT;
   if (autoCompactPre > 0) return autoCompactPre <= BASE_LIMIT * 1.02 ? BASE_LIMIT : LONG_LIMIT;
   if (observedMax > BASE_LIMIT * 0.95) return LONG_LIMIT;
@@ -122,7 +122,7 @@ const tag = (s: string, name: string): string | null => {
 };
 
 /** `/review 3305` from the wrapper Claude records a slash command as. */
-export function commandLine(s: string): string {
+function commandLine(s: string): string {
   const name = (tag(s, "command-name") ?? tag(s, "command-message") ?? "").trim();
   const args = (tag(s, "command-args") ?? "").trim();
   const n = name.startsWith("/") ? name : `/${name}`;
@@ -149,7 +149,7 @@ const attr = (attrs: string, name: string): string | undefined => {
  * ends, carrying what it reported, and the shutdown handshake. A teammate
  * delivered several at once gets one record holding them all.
  */
-export function mateMessages(s: string): MateMessage[] {
+function mateMessages(s: string): MateMessage[] {
   const out: MateMessage[] = [];
   for (const m of s.matchAll(MATE_BLOCK)) {
     const name = attr(m[1]!, "teammate_id");
@@ -231,7 +231,7 @@ export function tidyPath(p: unknown): string {
 }
 
 /** One line per tool call: at fleet scale a timeline is skimmed, not read. */
-export function summarizeClaudeTool(name: string, input: any): string {
+function summarizeClaudeTool(name: string, input: any): string {
   const i = input ?? {};
   switch (name) {
     case "Read":
@@ -299,7 +299,7 @@ function askAnswersOf(r: any): Record<string, string> | undefined {
 }
 
 /** A tool_result's content as text. Images become a marker. */
-export function toolResultText(content: unknown): string {
+function toolResultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content == null ? "" : JSON.stringify(content);
   return content
@@ -329,7 +329,7 @@ function blocksText(content: unknown): string {
  * where thinking reads `thinking`. Claude Code decodes it and shows the block
  * as text, and so do we. Matched as field 8's bytes: tag 0x42, length 9.
  */
-export function isNarration(b: any): boolean {
+function isNarration(b: any): boolean {
   if (b?.type !== "thinking" || typeof b.thinking !== "string" || !b.thinking.trim() || typeof b.signature !== "string") return false;
   return Buffer.from(b.signature.slice(0, 96), "base64").includes("B\tnarration", 0, "latin1");
 }
@@ -350,7 +350,7 @@ const SYNTHETIC = "<synthetic>";
  */
 const LIMIT_TEXT = /hit your .*limit|out of (usage credits|extra usage)|usage limit reached|session limit reached/i;
 
-export function isRateLimitRecord(r: any): boolean {
+function isRateLimitRecord(r: any): boolean {
   if (!r?.isApiErrorMessage) return false;
   return r.error === "rate_limit" || LIMIT_TEXT.test(blocksText(r.message?.content));
 }
@@ -375,7 +375,7 @@ const FATAL_ERROR_TEXT =
  *  minutes and came back with the same token; a new login was never needed. */
 const GRANT_ERROR_TEXT = /requires an access grant/i;
 
-export function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
+function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
   if (OUTPUT_CAP_TEXT.test(text)) return "output-cap";
   if (GRANT_ERROR_TEXT.test(text)) return "transient";
   if (FATAL_ERROR_TEXT.test(text)) return "fatal";
@@ -978,7 +978,7 @@ const ONE_SHOT_MAX_MS = 24 * 3_600_000;
  * numbers (that is how Claude writes "tomorrow at 9"), in local time, at the
  * first such moment after it was set. Anything else is given a day.
  */
-export function oneShotFire(cron: string, setAt: number): number {
+function oneShotFire(cron: string, setAt: number): number {
   const f = cron.trim().split(/\s+/);
   const [min, hour, dom, mon] = f.map(Number);
   if (f.length < 5 || ![min, hour, dom, mon].every((x) => Number.isInteger(x))) return setAt + ONE_SHOT_MAX_MS;
@@ -1021,7 +1021,7 @@ function firstSentence(text: string): string {
 
 /** Timeline pieces for one Claude record. Ids are the record's uuid plus the
  *  block index, so a tool event re-sent with its result keeps its id. */
-export function claudePieces(r: any, index: number): Piece[] {
+function claudePieces(r: any, index: number): Piece[] {
   if (!r || typeof r !== "object") return [];
   // Sidechain records (pre-2.1 subagents written inline) would interleave a
   // second conversation into this one.
@@ -1220,7 +1220,7 @@ function userStringPieces(s: string, id: string, at: number): Piece[] {
 }
 
 /** Tool-call ids a record opens and closes, without building any events. */
-export function claudeLinks(r: any): { calls?: string[]; results?: string[] } | null {
+function claudeLinks(r: any): { calls?: string[]; results?: string[] } | null {
   const content = r?.message?.content;
   if (!Array.isArray(content) || r.isSidechain === true) return null;
   if (r.type === "assistant") {

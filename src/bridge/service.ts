@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { logDir } from "../core/paths";
 import { bridgePort } from "./models";
 
-export const BRIDGE_UNIT = "agentbox-devin-bridge";
+const BRIDGE_UNIT = "agentbox-devin-bridge";
 
 /** Settings of this process the bridge has to share: its port and thresholds
  *  are compiled into what sessions are told, it reads the same homes, and it
@@ -37,7 +37,7 @@ function systemctl(...args: string[]): number {
 
 /** Whether something answers on the bridge's port. Synchronous, since the
  *  adapters that need to know build their commands synchronously. */
-export function bridgeListening(): boolean {
+function bridgeListening(): boolean {
   try {
     const r = Bun.spawnSync(["curl", "-s", "-m", "1", "-o", "/dev/null", "-w", "%{http_code}", `http://127.0.0.1:${bridgePort()}/healthz`], {
       stdout: "pipe",

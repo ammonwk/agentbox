@@ -43,7 +43,7 @@ const stamps = new Map<string, string>();
 
 /** A hash over a provider's reader modules and their runtime imports,
  *  transitively. Type-only imports are skipped: they change no fold. */
-export function readerCodeStamp(provider: ProviderId): string {
+function readerCodeStamp(provider: ProviderId): string {
   return codeStamp(READER_ROOTS[provider]);
 }
 
@@ -87,7 +87,7 @@ export function openReader(adapter: ProviderAdapter, ref: TranscriptRef): { read
 }
 
 /** A reader's saved state for `path`, if one was saved by this code. */
-export function loadReaderState(provider: ProviderId, path: string): unknown {
+function loadReaderState(provider: ProviderId, path: string): unknown {
   let buf: Buffer;
   try {
     buf = readFileSync(fileFor(path));

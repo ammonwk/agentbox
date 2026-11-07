@@ -71,7 +71,7 @@ const CLOSE_FINISHED_MS = 60 * 60_000;
  * same failure; 10-25 the nightly release, resumed to be told its run had
  * concluded, was closed before it got to that turn.
  */
-export function finished(s: Session, claims: ReadonlyMap<string, unknown>): boolean {
+function finished(s: Session, claims: ReadonlyMap<string, unknown>): boolean {
   if (s.closedAt !== null || s.status === "closed") return true;
   if (s.status !== "waiting" && s.status !== "stopped") return false;
   if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) return false;

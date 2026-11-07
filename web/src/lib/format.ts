@@ -116,11 +116,6 @@ export function fmtPts(n: number | null | undefined): string {
   return String(Object.is(r, -0) ? 0 : r);
 }
 
-export function pct(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return `${Math.round(n)}%`;
-}
-
 export function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }

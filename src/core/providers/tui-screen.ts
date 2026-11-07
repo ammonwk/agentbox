@@ -74,8 +74,3 @@ export function underInput(screen: string, isInput: (lines: string[], i: number)
   }
   return screen;
 }
-
-/** Every pattern appears on screen. */
-export function shows(screen: string, ...patterns: RegExp[]): boolean {
-  return patterns.every((p) => p.test(screen));
-}

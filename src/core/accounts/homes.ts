@@ -36,7 +36,7 @@ import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
-export const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp", "muse"];
+const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp", "muse"];
 
 /**
  * A request this module refuses, with the HTTP status that says why: 404 for
@@ -318,7 +318,7 @@ const CLAUDE_JSON_KEYS = new Set([
 ]);
 const CLAUDE_JSON_PATTERNS = [/MigrationComplete$/, /^hasCompleted/, /^hasSeen/, /Dismissed$/];
 
-export function seedClaudeJson(source: Record<string, unknown>): Record<string, unknown> {
+function seedClaudeJson(source: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(source)) {
     if (CLAUDE_JSON_KEYS.has(k)) out[k] = v;

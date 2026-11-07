@@ -79,7 +79,7 @@ export interface RateAccount {
 
 /** A plan, as the evidence is pooled: the provider and its tier. Go's plan
  *  carries the workspace's name after " · ", which is no part of the tier. */
-export function planOf(a: { provider: string; plan: string | null }): string {
+function planOf(a: { provider: string; plan: string | null }): string {
   const tier = a.plan?.split(" · ")[0]?.trim();
   return tier ? `${a.provider} · ${tier}` : a.provider;
 }

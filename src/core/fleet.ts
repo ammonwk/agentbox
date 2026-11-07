@@ -219,7 +219,7 @@ export interface Runtime {
   takeBuffer?(buffer: string): string | null;
 }
 
-export interface UsageSource {
+interface UsageSource {
   usageOf(accountId: string): AccountUsage | null;
   /** The account's login state, if known. */
   authOf?(accountId: string): AccountAuth["state"] | null;
@@ -4732,7 +4732,7 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: str
  * agent sent) makes a poor title, so it falls through to the directory name;
  * a slash command (`/release`) says what the session is for, so it stays.
  */
-export function headline(prompt: string | null | undefined): string | null {
+function headline(prompt: string | null | undefined): string | null {
   if (!prompt) return null;
   const line = prompt.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
   if (!line || line.startsWith("<")) return null;

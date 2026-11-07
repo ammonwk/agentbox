@@ -16,10 +16,10 @@ import type { Runtime } from "./fleet";
 import { readBtwPanel, showsQuestion } from "./providers/claude-btw";
 
 /** How long an answer may take: a big context asked cold is slow. */
-export const BTW_TIMEOUT_MS = 10 * 60_000;
+const BTW_TIMEOUT_MS = 10 * 60_000;
 const POLL_MS = 400;
 
-export class BtwError extends Error {}
+class BtwError extends Error {}
 
 /**
  * Until the panel shows `question` answered (`null`: whatever it is asking).

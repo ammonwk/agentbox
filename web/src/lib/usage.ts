@@ -1,7 +1,7 @@
 /** Usage-window math for the Accounts page, the session header and the
  *  placement preview. Pure: `now` is always passed in. */
 
-import type { AccountUsage, AccountView, ClaimView, UsageWindow } from "../../../src/core/types";
+import type { AccountUsage, ClaimView, UsageWindow } from "../../../src/core/types";
 import { clamp, fmtCountdown, fmtPts } from "./format";
 
 export type Tone = "ok" | "warn" | "bad";
@@ -106,14 +106,4 @@ export function headlineWindows(usage: AccountUsage): { short: UsageWindow | nul
   const short = usage.windows.find((w) => w.kind === "short" && !w.scope) ?? null;
   const weekly = usage.windows.find((w) => w.kind === "weekly" && !w.scope) ?? null;
   return { short, weekly };
-}
-
-/** "5h 62% · wk 41%" — the whole account in one glance, for chips and headers. */
-export function usageSummary(account: Pick<AccountView, "usage">): string {
-  const { short, weekly } = headlineWindows(account.usage);
-  const parts: string[] = [];
-  if (short) parts.push(`5h ${Math.round(short.usedPct)}%`);
-  if (weekly) parts.push(`wk ${Math.round(weekly.usedPct)}%`);
-  if (parts.length === 0) return account.usage.windows.length ? `${account.usage.windows.length} windows` : "no usage data";
-  return parts.join(" · ");
 }

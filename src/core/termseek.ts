@@ -47,7 +47,7 @@ interface Key {
   text: string;
 }
 
-export function keysOf(turns: readonly Turn[]): Key[] {
+function keysOf(turns: readonly Turn[]): Key[] {
   return turns.map((t) => {
     const first = norm(t.text.split("\n").find((l) => l.trim() !== "") ?? "");
     return { anywhere: t.kind === "answer", text: first };
@@ -62,7 +62,7 @@ function matches(row: string, isPrompt: boolean, k: Key): boolean {
   return (row.length >= MIN_PREFIX && k.text.startsWith(row)) || (k.text.length >= MIN_PREFIX && row.startsWith(k.text));
 }
 
-export interface Placed {
+interface Placed {
   row: number;
   /** Index into the turns. */
   turn: number;
@@ -73,7 +73,7 @@ export interface Placed {
  * Only turns within `[lo, hi]` are considered: what is known of where the
  * screen can be from the screens before it.
  */
-export function place(lines: readonly string[], keys: readonly Key[], lo = 0, hi = keys.length - 1): Placed[] {
+function place(lines: readonly string[], keys: readonly Key[], lo = 0, hi = keys.length - 1): Placed[] {
   // The last prompt row near the bottom is the box you type in, not history.
   let input = -1;
   for (let r = lines.length - 1; r >= Math.max(0, lines.length - FOOTER_ROWS - 4); r--) {
@@ -110,7 +110,7 @@ export function place(lines: readonly string[], keys: readonly Key[], lo = 0, hi
 }
 
 /** Read in the footer only: the same words in the history are just words. */
-export function isScrolled(screen: string): boolean {
+function isScrolled(screen: string): boolean {
   return SCROLLED.test(screen.split("\n").slice(-FOOTER_ROWS - 4).join("\n"));
 }
 

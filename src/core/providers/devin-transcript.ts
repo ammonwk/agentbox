@@ -79,7 +79,7 @@ function imagesIn(content: unknown): number {
 }
 
 /** One line for a tool call: the argument a reader scans for. */
-export function devinToolSummary(args: unknown): string {
+function devinToolSummary(args: unknown): string {
   if (!args || typeof args !== "object") return typeof args === "string" ? oneLine(args, 200) : "";
   const a = args as Record<string, unknown>;
   if (Array.isArray(a.questions)) return oneLine((a.questions[0] as any)?.question ?? "asked a question", 200);

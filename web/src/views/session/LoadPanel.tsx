@@ -21,7 +21,7 @@ import { cpuTone, fmtDur } from "../../lib/format";
  * quarter of the box" is what the number is read for. Ammon asked for it on
  * 11-06 over htop's per-core 1,400%, which made every reading a division.
  */
-export function cpuText(pct: number): string {
+function cpuText(pct: number): string {
   if (pct >= 10) return `${Math.round(pct)}%`;
   if (pct >= 0.1) return `${pct.toFixed(1)}%`;
   return pct > 0 ? "<0.1%" : "—";

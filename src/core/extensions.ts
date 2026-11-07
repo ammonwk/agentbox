@@ -65,9 +65,9 @@ export class ExtensionError extends Error {
 }
 
 /** Where extensions are: one entry each, a directory or a link to one. */
-export const extensionsDir = (): string => join(agentboxHome(), "extensions");
+const extensionsDir = (): string => join(agentboxHome(), "extensions");
 /** Each one's own state: its log, its pid, its token, and whatever it keeps. */
-export const extensionHome = (name: string): string => join(extensionsDir(), ".state", name);
+const extensionHome = (name: string): string => join(extensionsDir(), ".state", name);
 
 /** The ones that come with agentbox. One of yours by the same name is the one used. */
 const builtInDir = join(packageRoot, "extensions");

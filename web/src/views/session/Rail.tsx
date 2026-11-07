@@ -1422,7 +1422,7 @@ function HitRow({
 
 /** The Active/Inactive tablist, apart from the rail so another list can put
  *  the same two tabs over it. */
-export function RailTabs({ view, counts, onChange }: { view: RailView; counts: Record<RailView, number>; onChange: (view: RailView) => void }) {
+function RailTabs({ view, counts, onChange }: { view: RailView; counts: Record<RailView, number>; onChange: (view: RailView) => void }) {
   return (
     <div className="rail-views" role="tablist" aria-label="Which sessions">
       {(["active", "inactive"] as const).map((v) => (

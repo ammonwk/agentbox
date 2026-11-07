@@ -29,7 +29,7 @@ import type { ModelOutcome } from "./providers/types";
 
 const HOUR = 3_600_000;
 /** How long after the last refusal a route takes nothing new. */
-export const REFUSAL_HOLD_MS = HOUR;
+const REFUSAL_HOLD_MS = HOUR;
 /** How far back a refusal still counts toward the two. */
 export const REFUSAL_LOOKBACK_MS = 24 * HOUR;
 const REFUSED_SESSIONS = 2;

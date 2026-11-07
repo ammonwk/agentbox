@@ -59,7 +59,7 @@ export function standingRules(): string {
 /** The registered repo `cwd` belongs to, or null for a directory outside every
  *  one of them. A linked worktree answers with the checkout it was cut from,
  *  which is the repository its sessions belong to. */
-export function repoForCwd(cwd: string, repos: readonly Repo[] = listRepos()): Repo | null {
+function repoForCwd(cwd: string, repos: readonly Repo[] = listRepos()): Repo | null {
   const root = repoRootOf(cwd);
   if (!root) return null;
   for (const repo of repos) {

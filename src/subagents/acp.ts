@@ -24,7 +24,7 @@ import type { SubagentProgress, ToolCall, ToolKind, ToolStatus } from "./types";
 
 /** Upper bound on the tool output kept for one call. omp's own session log
  *  keeps the whole `rawOutput`. */
-export const MAX_TOOL_OUTPUT = 4000;
+const MAX_TOOL_OUTPUT = 4000;
 
 /** Calls we keep addressable for late updates. Beyond this the oldest are
  *  evicted; an update for an evicted call is treated as a new one. */
@@ -143,7 +143,7 @@ function recentToolsOf(raw: unknown): SubagentProgress["recentTools"] {
  * Returns undefined when the payload carries no snapshot, which is the
  * common case for every non-subagent tool.
  */
-export function subagentsOf(rawOutput: unknown): SubagentProgress[] | undefined {
+function subagentsOf(rawOutput: unknown): SubagentProgress[] | undefined {
   if (!rawOutput || typeof rawOutput !== "object") return undefined;
   const details = (rawOutput as Record<string, unknown>).details;
   if (!details || typeof details !== "object") return undefined;
@@ -228,7 +228,7 @@ function stringify(value: unknown): string {
  * errorMessage}`; `content` is also delivered separately as ACP content
  * blocks, which is the fallback when rawOutput is absent.
  */
-export function summarizeToolOutput(rawOutput: unknown, content?: unknown): string | null {
+function summarizeToolOutput(rawOutput: unknown, content?: unknown): string | null {
   const parts: string[] = [];
   if (rawOutput && typeof rawOutput === "object") {
     const o = rawOutput as Record<string, unknown>;
@@ -261,7 +261,7 @@ export function summarizeToolOutput(rawOutput: unknown, content?: unknown): stri
  * when the call carries one, so it cannot be parsed back into a name.
  * Consumers classify on `kind` plus the shape of `input`.
  */
-export class ToolCallTracker {
+class ToolCallTracker {
   private calls = new Map<string, ToolCall>();
 
   /** Handle a `tool_call`. Returns null when the payload has no id. */

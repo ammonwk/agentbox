@@ -18,7 +18,7 @@
 import { run } from "./core/git";
 import type { DepSnapshot, DepStatus } from "./core/types";
 
-export type { DepSnapshot, DepState, DepStatus } from "./core/types";
+export type { DepSnapshot, DepStatus } from "./core/types";
 
 /**
  * Long enough that nothing can turn `/api/health` into a subprocess treadmill;
@@ -74,7 +74,7 @@ interface GhAuthEntry {
   login?: string;
 }
 
-export function probeGh(): DepStatus {
+function probeGh(): DepStatus {
   // The JSON form, because it is the only one that tells a token GitHub
   // refused from a GitHub that could not be reached: offline, the text form
   // calls every token "invalid", so a laptop waking up read as logged out.

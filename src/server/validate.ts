@@ -36,7 +36,7 @@ export function requireBoolean(obj: Record<string, unknown>, key: string, label 
   return v;
 }
 
-export function requirePositiveInt(obj: Record<string, unknown>, key: string, label = key): number {
+function requirePositiveInt(obj: Record<string, unknown>, key: string, label = key): number {
   const v = obj[key];
   if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
     throw new HttpError(400, `${label} must be a positive integer`);
@@ -44,7 +44,7 @@ export function requirePositiveInt(obj: Record<string, unknown>, key: string, la
   return v;
 }
 
-export function asObject(v: unknown, label: string): Record<string, unknown> {
+function asObject(v: unknown, label: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
     throw new HttpError(400, `${label} must be an object`);
   }

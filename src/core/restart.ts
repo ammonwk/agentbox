@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "./paths";
 
-export function serviceRestart(): string[] | null {
+function serviceRestart(): string[] | null {
   if (process.platform === "darwin" && existsSync(join(userHome(), "Library", "LaunchAgents", "local.agentbox.server.plist")))
     return ["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/local.agentbox.server`];
   if (Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0)

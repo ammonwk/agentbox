@@ -61,7 +61,7 @@ export function readUserIdentity(): UserIdentity {
   };
 }
 
-export type IdentitySource = "user.env" | "git config" | "gh" | "passwd" | "$USER" | "system" | "unset";
+type IdentitySource = "user.env" | "git config" | "gh" | "passwd" | "$USER" | "system" | "unset";
 
 /** Where each value came from, alongside the value — onboarding's report. */
 export interface DerivedIdentity {

@@ -32,7 +32,7 @@ import { messageTail } from "../turnstatus";
  *  carries them on every push. */
 const PROMPT_CAP = 2000;
 
-export interface OmpHeader {
+interface OmpHeader {
   id: string;
   cwd: string | null;
   startedAt: number | null;
@@ -111,7 +111,7 @@ export function newOmpState(): OmpState {
 }
 
 /** omp writes ISO strings on entries and epoch millis inside messages. */
-export function tsOf(raw: unknown): number | null {
+function tsOf(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw !== "string") return null;
   const ms = Date.parse(raw);
@@ -192,7 +192,7 @@ function argsJson(args: unknown): string | undefined {
  * catches the providers that report a limit with some other status
  * ("5-hour usage limit reached" from opencode arrives as a plain error).
  */
-export function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: unknown }): boolean {
+function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: unknown }): boolean {
   if (msg.errorStatus === 429) return true;
   const m = typeof msg.errorMessage === "string" ? msg.errorMessage : "";
   return /rate.?limit|usage limit|quota|too many requests|FreeUsageLimitError/i.test(m);
@@ -546,7 +546,7 @@ export function ompEvents(
  * `color: "Teal please"` or `sizes: [Small, Large]`. Undefined for anything
  * else (a cancel reads "Ask input was cancelled").
  */
-export function ompAskAnswers(output: string, questions: AskQuestion[]): Record<string, string> | undefined {
+function ompAskAnswers(output: string, questions: AskQuestion[]): Record<string, string> | undefined {
   const unwrap = (v: string) => v.trim().replace(/^\[(.*)\]$/, "$1").replace(/^"(.*)"$/, "$1");
   const one = /^User (?:selected|answered|provided)[^:\n]*:\s*(.+)$/.exec(output.trim());
   if (one && questions.length === 1) return { [questions[0]!.question]: unwrap(one[1]!) };

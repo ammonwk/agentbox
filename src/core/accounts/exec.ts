@@ -6,14 +6,14 @@
  * provider it knows and can take seconds.
  */
 
-export interface ExecResult {
+interface ExecResult {
   code: number;
   stdout: string;
   stderr: string;
   timedOut: boolean;
 }
 
-export interface ExecOptions {
+interface ExecOptions {
   env?: Record<string, string>;
   /** Removed from the inherited environment (e.g. a stray CLAUDE_CONFIG_DIR). */
   unset?: string[];

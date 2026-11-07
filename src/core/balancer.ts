@@ -159,7 +159,7 @@ const PACE_MIN_SPAN = 10 * 60_000;
 const STALL_MS = 10 * 60_000;
 
 /** The unscoped weekly window, if the provider reports one. */
-export function weeklyWindow(windows: UsageWindow[]): UsageWindow | null {
+function weeklyWindow(windows: UsageWindow[]): UsageWindow | null {
   return windows.find((w) => w.kind === "weekly" && !w.scope) ?? null;
 }
 
@@ -203,7 +203,7 @@ const round1 = (n: number): number => Math.round(n * 10) / 10;
  * none; the last one before the span stands for its start. Null when the
  * window is not running or the readings cover too little time.
  */
-export function paceOf(
+function paceOf(
   short: UsageWindow,
   samples: AccountState["shortSamples"],
   now: number,

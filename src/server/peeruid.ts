@@ -15,7 +15,7 @@ const TABLES = ["/proc/net/tcp", "/proc/net/tcp6"];
 /** The uid that owns the client end of a connection from `clientPort` to
  *  `serverPort` on this machine; undefined where /proc has no such table,
  *  null when no row matches. */
-export function connectionUid(clientPort: number, serverPort: number): number | null | undefined {
+function connectionUid(clientPort: number, serverPort: number): number | null | undefined {
   let any = false;
   const want = `:${clientPort.toString(16).toUpperCase().padStart(4, "0")}`;
   const peer = `:${serverPort.toString(16).toUpperCase().padStart(4, "0")}`;

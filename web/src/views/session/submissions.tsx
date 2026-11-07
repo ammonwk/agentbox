@@ -36,7 +36,7 @@ const sending = (p: PendingSend) => p.state === "pending" || p.state === "attemp
 
 const normalized = (text: string) => dropPasteTags(text).replace(/\r\n/g, "\n").trim();
 /** Full content, after this submission began; never scan ordinary drafts. */
-export function submissionLanded(p: PendingSend, users: readonly { text: string; at: number }[]): boolean {
+function submissionLanded(p: PendingSend, users: readonly { text: string; at: number }[]): boolean {
   if (p.kind === "btw" || !p.body.trim()) return false;
   const want = normalized(p.body);
   return users.some((u) => u.at >= p.at && normalized(u.text) === want);

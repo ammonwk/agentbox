@@ -75,7 +75,7 @@ let idCounter = 0;
  * at 1, as opencode's does: OpenCode Zen refuses its free models to a session
  * whose id has 0 there ("Free usage limit reached", measured 2026-11-04).
  */
-export function newSessionId(now = Date.now()): string {
+function newSessionId(now = Date.now()): string {
   if (now !== lastIdMs) {
     lastIdMs = now;
     idCounter = 0;
@@ -102,7 +102,7 @@ const SUBCOMMANDS = new Set([
 const VALUE_FLAGS = new Set(["-s", "--session", "--prompt", "--server", "--log-level", "--completions", "-m", "--model", "--agent", "-f", "--file", "--title", "--format"]);
 
 /** The subcommand and the directory argument of an opencode argv. */
-export function parseOpencodeArgv(argv: string[]): { sub: string | null; dir: string | null; session: string | null } {
+function parseOpencodeArgv(argv: string[]): { sub: string | null; dir: string | null; session: string | null } {
   let sub: string | null = null;
   let dir: string | null = null;
   let session: string | null = null;
@@ -132,14 +132,14 @@ export function parseOpencodeArgv(argv: string[]): { sub: string | null; dir: st
 
 /** An interactive opencode: the TUI (or `mini`), not a server, a one-shot
  *  `run`, or any other subcommand. */
-export function isOpencodeTui(argv: string[]): boolean {
+function isOpencodeTui(argv: string[]): boolean {
   if (!runsCli(argv, "opencode")) return false;
   if (argv.some((a) => a === "--help" || a === "-h" || a === "--version" || a === "-v")) return false;
   const { sub } = parseOpencodeArgv(argv);
   return sub === null || sub === "mini";
 }
 
-export interface OpencodeProc {
+interface OpencodeProc {
   pid: number;
   /** The directory the TUI opened: its argument, else its cwd. */
   cwd: string;
@@ -156,7 +156,7 @@ export interface OpencodeProc {
  *     since it started, not already claimed — a new session, or `-c`, or one
  *     opened from the TUI's own list.
  */
-export function attributeOpencode(
+function attributeOpencode(
   procs: OpencodeProc[],
   look: { exists(id: string): boolean; touchedSince(ms: number): db.OpencodeSessionRow[] },
 ): Map<number, string | null> {
@@ -405,7 +405,7 @@ class OpencodeReader implements TranscriptReader {
 // ----------------------------------------------------------- launching
 
 /** `provider/model`, optionally `#variant`, as opencode's model ref. */
-export function modelRef(model: string | null | undefined, variant?: string | null): { id: string; providerID: string; variant?: string } | null {
+function modelRef(model: string | null | undefined, variant?: string | null): { id: string; providerID: string; variant?: string } | null {
   if (!model) return null;
   const hash = model.indexOf("#");
   const base = hash >= 0 ? model.slice(0, hash) : model;
@@ -488,7 +488,7 @@ function tuiFlags(opts: { autoApprove: boolean; carry?: string[] }): string[] {
   return a;
 }
 
-export interface OpencodeAdapterOptions {
+interface OpencodeAdapterOptions {
   /** opencode's data dir; read on every call so tests can point it at a fixture. */
   dataDir?: () => string;
 }

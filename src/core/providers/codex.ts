@@ -61,14 +61,6 @@ export function codexHome(account: Pick<Account, "isDefault" | "home">): string 
 
 const norm = (p: string) => resolve(p).replace(/\/+$/, "");
 
-/** Start of a rollout from its filename, which is written in local time. */
-export function rolloutStartFromName(name: string): number | null {
-  const m = ROLLOUT.exec(name);
-  if (!m) return null;
-  const [, y, mo, d, h, mi, s] = m;
-  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)).getTime();
-}
-
 // ------------------------------------------------------------- listing
 
 /** How far back day directories are walked by default: a rollout started
@@ -165,7 +157,7 @@ function indexFor(home: string): SessionsIndex {
 
 /** First line of a file, read in small steps: record 0 carries the base
  *  instructions and can run to tens of KB, and the rest can run to 200 MB. */
-export function readFirstLine(path: string, max = 4 * 1024 * 1024): string | null {
+function readFirstLine(path: string, max = 4 * 1024 * 1024): string | null {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -265,7 +257,7 @@ const VALUE_OPTS = new Set([
   "-C", "--cd", "--add-dir", "-o", "--output-last-message", "--output-schema", "--color",
 ]);
 
-export interface CodexInvocation {
+interface CodexInvocation {
   /** undefined = interactive TUI. */
   sub: string | undefined;
   /** The uuid `codex resume <uuid>` names. */
@@ -275,7 +267,7 @@ export interface CodexInvocation {
 }
 
 /** What a codex argv is doing. `args` excludes the program (and node). */
-export function parseCodexArgs(args: string[]): CodexInvocation {
+function parseCodexArgs(args: string[]): CodexInvocation {
   let sub: string | undefined;
   let resumeId: string | null = null;
   let cd: string | null = null;
@@ -575,7 +567,7 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
  *  A thread with a rollout goes first: `codex exec` (0.156) also holds the
  *  writer lock of a side thread it never writes a rollout for, created just
  *  after its own, and that id matches no session. */
-export function pickThread(
+function pickThread(
   ids: string[],
   home: string,
   find: (id: string) => string | null = (id) => indexFor(home).find(id),
@@ -603,7 +595,7 @@ export function pickThread(
  * session was). Model migration and login are left to you; hook trust never
  * comes up where approvals are bypassed (`sessionFlags`).
  */
-export function codexAutoAnswer(raw: string): string[] | null {
+function codexAutoAnswer(raw: string): string[] | null {
   const s = plainScreen(raw);
   if (/Trust this folder\?/.test(s) && /Trust and continue/.test(s)) return pickOption(s, /^Trust and continue/);
   if (/Do you trust the contents of this directory/.test(s) && /Yes, continue/.test(s)) return pickOption(s, /^Yes, continue/);
@@ -617,7 +609,7 @@ export function codexAutoAnswer(raw: string): string[] | null {
 const composer = (lines: string[], i: number): boolean =>
   /^›(\s|$)/.test(lines[i]!) && !/^›\s+\d+[.)]\s/.test(lines[i]!) && !lines[i - 1]?.trim() && !lines[i + 1]?.trim();
 
-export function codexBlockedOn(raw: string): string | null {
+function codexBlockedOn(raw: string): string | null {
   // Every prompt below stands where the composer was.
   const s = underInput(plainScreen(raw), composer);
   if (/Sign in with ChatGPT/.test(s) && /Sign in with Device Code|Provide your own API key|Welcome to Codex/.test(s)) return "login required";
@@ -749,7 +741,7 @@ function sessionFlags(opts: { session: string; cwd: string; briefingFile?: strin
 
 /** Codex's own sandbox: it reads, and asks for nothing it could not do. Kept
  *  as the session's launch, so a resume is read-only too. */
-export const READ_ONLY = ["--sandbox", "read-only", "--ask-for-approval", "never"];
+const READ_ONLY = ["--sandbox", "read-only", "--ask-for-approval", "never"];
 
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const argv = ["codex", ...sessionFlags(opts)];
@@ -786,7 +778,7 @@ function homeOfRollout(path: string): string | null {
   return m ? m[1]! : null;
 }
 
-export function codexReader(ref: TranscriptRef): TranscriptReader {
+function codexReader(ref: TranscriptRef): TranscriptReader {
   const home = homeOfRollout(ref.path);
   return new JsonlTranscriptReader(ref, codexFormat(ref, () => (home ? threadName(home, ref.agentSessionId) : null)));
 }

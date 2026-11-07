@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CatalogModel } from "./devin-wire";
 
-export const DEFAULT_BRIDGE_PORT = 4480;
+const DEFAULT_BRIDGE_PORT = 4480;
 
 export function bridgePort(): number {
   return Number(process.env.AGENTBOX_DEVIN_BRIDGE_PORT) || DEFAULT_BRIDGE_PORT;

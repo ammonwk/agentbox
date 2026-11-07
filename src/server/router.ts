@@ -160,7 +160,7 @@ export class Router {
  * The default error mapping: everything unrecognised is a 500 carrying its
  * real message, because a legible failure beats a tidy one.
  */
-export function toHttpError(e: unknown): HttpError {
+function toHttpError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }

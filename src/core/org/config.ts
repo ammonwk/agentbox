@@ -2,7 +2,7 @@
  *  `agentbox org init` or `join`. Membership is the file: whoever has it has
  *  the store and the key, so it is 0600 and travels only as an invite. */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { agentboxHome } from "../paths";
@@ -60,8 +60,6 @@ export function writeOrg(org: OrgConfig): void {
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
 }
-
-export const inOrg = (): boolean => existsSync(orgConfigPath()) && readOrg() !== null;
 
 function checkOrg(v: unknown): OrgConfig {
   const o = v as Partial<OrgConfig> | null;

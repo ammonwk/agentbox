@@ -26,7 +26,7 @@ export function shownStatus(s: Pick<Session, "status" | "autoResume">): ShownSta
 }
 
 /** The fallback order when two rows carry the same server rank. */
-export const KIND_ORDER: Record<AttentionKind, number> = {
+const KIND_ORDER: Record<AttentionKind, number> = {
   blocked: 0,
   waiting: 1,
   running: 2,
@@ -35,7 +35,7 @@ export const KIND_ORDER: Record<AttentionKind, number> = {
 };
 
 /** By attention, then latest prompt; assistant activity does not move a row. */
-export function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
+function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
   return [...rows].sort(
     (a, b) =>
       KIND_ORDER[a.attention.kind] - KIND_ORDER[b.attention.kind] ||
@@ -119,10 +119,10 @@ export const SORT_LABEL: Record<SortKey, string> = {
 export type RailView = "active" | "inactive";
 
 /** How recent a session's last activity must be for the Active tab. */
-export const ACTIVE_MS = 3 * 60 * 60_000;
+const ACTIVE_MS = 3 * 60 * 60_000;
 
 /** Active on its own: running, recent, needing you or pinned (see splitActive). */
-export function isActive(s: SessionRow, now: number): boolean {
+function isActive(s: SessionRow, now: number): boolean {
   return s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS;
 }
 
@@ -358,7 +358,7 @@ export function searchSectionsOf<T extends SessionRow>(rows: readonly T[], query
 }
 
 /** The shapes a session's status dot takes, one per repo. */
-export const SHAPES = ["circle", "square", "triangle", "diamond", "star", "cross", "down"] as const;
+const SHAPES = ["circle", "square", "triangle", "diamond", "star", "cross", "down"] as const;
 export type Shape = (typeof SHAPES)[number];
 
 /**
@@ -407,11 +407,6 @@ const EMOJI = /[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D\u20E
 export function shownTitle(s: Pick<Session, "label" | "title" | "firstPrompt">): string {
   const clean = titleOf(s).replace(EMOJI, "").replace(/\s+/g, " ").trim();
   return clean || "Untitled session";
-}
-
-/** "agentbox · feat/x", or the cwd's basename when there is no repo. */
-export function whereOf(s: Pick<Session, "repoRoot" | "cwd" | "branch">): { name: string; branch: string | null } {
-  return { name: baseName(s.repoRoot ?? s.cwd), branch: s.branch };
 }
 
 /** 0–100, or null when either side is unknown. */

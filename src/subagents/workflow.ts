@@ -33,9 +33,9 @@ export const DEFAULT_CONCURRENCY = 6;
 export const MAX_AGENTS = 200;
 
 /** Wall-clock ceiling for a whole workflow. */
-export const DEFAULT_DEADLINE_MS = 30 * 60 * 1000;
+const DEFAULT_DEADLINE_MS = 30 * 60 * 1000;
 
-export interface AgentOptions {
+interface AgentOptions {
   /** Shown in the log. Defaults to a truncation of the prompt. */
   label?: string;
   cwd?: string;
@@ -81,7 +81,7 @@ export interface WorkflowResult {
 class WorkflowLimit extends Error {}
 
 /** One agent's place in the run, as a watcher would want it described. */
-export interface Slot {
+interface Slot {
   label: string;
   state: "queued" | "running" | "done" | "failed";
   /** How long it has been running, or how long it ran. */
@@ -122,7 +122,7 @@ function clip(s: string, max: number): string {
  * recent activity, so the line does not reshuffle under a reader every two
  * seconds — and because the straggler is the one worth looking at anyway.
  */
-export function renderRoster(slots: Slot[], note: string | null, max = 200): string {
+function renderRoster(slots: Slot[], note: string | null, max = 200): string {
   const done = slots.filter((s) => s.state === "done").length;
   const failed = slots.filter((s) => s.state === "failed").length;
   const queued = slots.filter((s) => s.state === "queued").length;
@@ -198,7 +198,7 @@ export function parseJsonArgs(args: unknown): unknown {
  * that throws on the first two would fail on a correct answer badly formatted.
  * So: try the fence, then the whole string, then the outermost braces.
  */
-export function parseJsonAnswer(text: string): unknown {
+function parseJsonAnswer(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
   const candidates = [fenced?.[1], text];
   const first = text.search(/[[{]/);

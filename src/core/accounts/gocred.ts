@@ -75,7 +75,7 @@ function readCached<T>(path: string, parse: (text: string) => T | null): T | nul
   }
 }
 
-export function parseGoLogin(text: string): GoLogin | null {
+function parseGoLogin(text: string): GoLogin | null {
   const v = JSON.parse(text) as Partial<GoLogin> | null;
   if (!v || typeof v.access !== "string" || typeof v.refresh !== "string" || typeof v.expires !== "number") return null;
   return {

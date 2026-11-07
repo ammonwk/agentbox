@@ -27,7 +27,7 @@ export const rowsVersion = (rows: readonly ChangeRow[]): string => Bun.hash(JSON
 const oneLine = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 
 /** The last `n` characters: an agent ends its turn with its question. */
-export function tail(s: string | null | undefined, n: number): string {
+function tail(s: string | null | undefined, n: number): string {
   const t = oneLine(s);
   return t.length > n ? `…${t.slice(-n)}` : t;
 }

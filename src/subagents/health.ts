@@ -49,7 +49,7 @@ const LOOP_REPEATS = 3;
 const CONTEXT_HIGH = 0.85;
 const CLOCK_HIGH = 0.8;
 
-export type Concern = "looping" | "quiet" | "context" | "overrunning" | "slow-tool" | "silent";
+type Concern = "looping" | "quiet" | "context" | "overrunning" | "slow-tool" | "silent";
 
 /**
  * Worst first. This is the order a reader should be told things in, and it is
@@ -69,7 +69,7 @@ const SEVERITY: Concern[] = ["looping", "quiet", "context", "overrunning", "slow
  */
 const ESCALATES = new Set<Concern>(["looping", "quiet"]);
 
-export interface Finding {
+interface Finding {
   concern: Concern;
   /** One line, in words, that a person or a model can act on. */
   note: string;
@@ -173,7 +173,7 @@ function thousands(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
 }
 
-export function duration(ms: number): string {
+function duration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 90) return `${s}s`;
   const m = Math.round(s / 60);

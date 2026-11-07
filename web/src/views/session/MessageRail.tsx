@@ -59,7 +59,7 @@ export function useTurns(sessionId: string, activity: number): TurnList | null {
  * least `MIN_GAP` (or evenly, when there are too many for that) without
  * leaving the track.
  */
-export function layoutDots(seqs: readonly number[], total: number, height: number): number[] {
+function layoutDots(seqs: readonly number[], total: number, height: number): number[] {
   const n = seqs.length;
   const span = Math.max(0, height - 2 * PAD);
   if (n === 0) return [];

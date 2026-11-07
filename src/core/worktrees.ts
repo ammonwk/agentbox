@@ -103,7 +103,7 @@ function orphanDirs(claimed: Set<string>): string[] {
 
 /** What the verdict is decided from. Everything here is already-gathered fact,
  *  so the decision itself is pure and testable without a repo on disk. */
-export interface WorktreeFacts {
+interface WorktreeFacts {
   isMain: boolean;
   locked: boolean;
   live: boolean;
@@ -135,16 +135,16 @@ export interface WorktreeFacts {
  * what nobody came back for, and the session's transcript still has most of it.
  * Anything unreadable, unanswerable or in use lands on the cautious side.
  */
-export const STALE_DAYS = 7;
-export const MINOR_DIRT_DAYS = 3;
+const STALE_DAYS = 7;
+const MINOR_DIRT_DAYS = 3;
 
 /** Whether what is uncommitted here still holds the worktree back. */
-export function dirtBlocks(dirt: Dirt["level"], idleDays: number): boolean {
+function dirtBlocks(dirt: Dirt["level"], idleDays: number): boolean {
   if (dirt === "none" || idleDays >= STALE_DAYS) return false;
   return dirt === "major" || idleDays < MINOR_DIRT_DAYS;
 }
 
-export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
+function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   // The repo's own checkout. `git worktree remove` refuses it anyway; saying so
   // explicitly means the count the human reads never includes it.
   if (input.isMain) return { safe: false, reason: "main", detail: "the repo's own checkout" };

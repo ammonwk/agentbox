@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { agentboxHome, userHome, packageRoot } from "./paths";
 import { installMacService, macServiceInstalled, startMacService, stopMacService } from "./macservice";
 
-export const SERVICE_UNIT = "agentbox.service";
+const SERVICE_UNIT = "agentbox.service";
 
 /** Where the user's own units live. */
 const unitDir = (): string =>
@@ -43,7 +43,7 @@ export function lingering(): boolean | null {
  * `%h/Documents/agentbox`. A login shell still runs the server, so every
  * agent inherits the environment your terminals have (PATH, nvm, GH_TOKEN).
  */
-export function unitText(): string {
+function unitText(): string {
   // Quoted, so a checkout under a path with spaces survives systemd's parser;
   // the log path follows AGENTBOX_HOME rather than assuming the default home.
   return `# agentbox's server as a service of your user's systemd, so it starts at boot

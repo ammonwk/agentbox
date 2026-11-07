@@ -7,7 +7,7 @@ import { useCallback, useSyncExternalStore } from "react";
  * two are a pair: CSS lays the single pane out, this decides which pane is
  * mounted and whether the detail needs a back button.
  */
-export const NARROW_PX = 900;
+const NARROW_PX = 900;
 
 const QUERY = `(max-width: ${NARROW_PX}px)`;
 

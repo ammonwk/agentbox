@@ -152,7 +152,7 @@ export interface ProcTable {
  * no cutime: a reaped child's CPU leaves with it, so a subtree's total counts
  * only its live members.
  */
-export function darwinRow(pid: number): ProcRow | null {
+function darwinRow(pid: number): ProcRow | null {
   const p = darwin.procInfo(pid);
   if (!p) return null;
   const ticks = p.cpuNs === null ? 0 : (p.cpuNs / 1e9) * clockHz();
@@ -315,7 +315,7 @@ export function subtreeCpuTicks(rows: ProcRow[]): number {
 
 /** Samples of history kept, per session and per process: five minutes at the
  *  metrics poll's 2s. Long enough to see a stall, short enough to send whole. */
-export const HISTORY = 150;
+const HISTORY = 150;
 
 interface Prior {
   ticks: number;
@@ -557,7 +557,7 @@ const BOOT_S = 20;
  * booted — omp runs commands without a shell, and Claude's Grep runs `rg` —
  * and an MCP server otherwise. A server reconnected later reads as a tool.
  */
-export function classify(row: ProcRow, agent: Pick<ProcRow, "pid" | "startTicks">, parentRole?: ProcRole): ProcRole {
+function classify(row: ProcRow, agent: Pick<ProcRow, "pid" | "startTicks">, parentRole?: ProcRole): ProcRole {
   if (row.pid === agent.pid) return "agent";
   if (parentRole === "agent") {
     return isToolShell(row.cmd) || row.startTicks - agent.startTicks > BOOT_S * clockHz() ? "tool" : "mcp";

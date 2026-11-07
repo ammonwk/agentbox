@@ -71,7 +71,7 @@ export function field(input: string | undefined, key: string): string | null {
 const SEND_CMD = /(?:^|[\s;&|(`"'])(?:\S*\/)?agentbox\s+send\s+/;
 
 /** `agentbox send <id> 'text'`, `… "text"`, `… words…`, or `… - <<'EOF'` with the text in the heredoc. */
-export function shellSend(cmd: string): SendCall | null {
+function shellSend(cmd: string): SendCall | null {
   const m = SEND_CMD.exec(cmd);
   if (!m) return null;
   const words = shellWords(cmd.slice(m.index + m[0].length));

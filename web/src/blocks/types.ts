@@ -26,10 +26,10 @@ export type Field =
   | { name: string; label: string; kind: "select"; value?: string; options: { value: string; label: string }[] }
   | { name: string; label: string; kind: "checkbox"; value?: boolean };
 
-export type Status = "ok" | "warn" | "bad" | "busy" | "idle";
+type Status = "ok" | "warn" | "bad" | "busy" | "idle";
 
 /** One entry of a `split` block's list, and what its pane shows when chosen. */
-export interface Pane {
+interface Pane {
   id: string;
   title: string;
   subtitle?: string;

@@ -82,7 +82,7 @@ function barOf(lines: string[], footer: number): number {
 }
 
 /** The dialog on screen, or null when there is none. */
-export function readAskScreen(raw: string): AskScreen | null {
+function readAskScreen(raw: string): AskScreen | null {
   const lines = plainScreen(raw).split("\n").map((l) => l.replace(/\s+$/, ""));
   const footer = lines.findIndex((l) => /↵ select/.test(l) && /esc cancel/.test(l));
   if (footer < 0) return null;

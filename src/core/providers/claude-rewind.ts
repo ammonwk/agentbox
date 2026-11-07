@@ -94,7 +94,7 @@ function listRows(lines: readonly string[], heading: RegExp): string[] | null {
 }
 
 /** A row of the list is the message: its first line, or as much as fits, ending in `…`. */
-export function shownAs(row: string, key: string): boolean {
+function shownAs(row: string, key: string): boolean {
   const r = norm(row);
   if (!r || !key) return false;
   if (r === key) return true;

@@ -37,7 +37,7 @@ interface CpuTicks {
   idle: number;
 }
 
-export function parseCpuLine(parts: string[]): CpuTicks {
+function parseCpuLine(parts: string[]): CpuTicks {
   const n = parts.map(Number);
   // user nice system idle iowait irq softirq steal guest guest_nice
   const idle = (n[3] ?? 0) + (n[4] ?? 0);
@@ -67,7 +67,7 @@ async function readCpuTicks(): Promise<{ all: CpuTicks; cores: CpuTicks[] }> {
 }
 
 /** Busy fraction between two cumulative readings, clamped into 0..1. */
-export function busy(prev: CpuTicks | undefined, cur: CpuTicks): number {
+function busy(prev: CpuTicks | undefined, cur: CpuTicks): number {
   if (!prev) return 0;
   const dt = cur.total - prev.total;
   if (dt <= 0) return 0;
@@ -123,7 +123,7 @@ async function resolveSensors(): Promise<SensorPath[]> {
  * unlabelled ACPI zones that cannot be attributed to any component. Showing all
  * of them would be a wall of numbers; these four are the ones with a story.
  */
-export function friendly(chip: string, label: string): string | null {
+function friendly(chip: string, label: string): string | null {
   if (chip === "coretemp" && label === "Package id 0") return "cpu";
   if (chip === "k10temp" && (label === "Tctl" || label === "")) return "cpu"; // AMD
   if (chip === "nvme" && label === "Composite") return "ssd";
@@ -183,7 +183,7 @@ async function readThrottle(): Promise<{ count?: number; totalMs?: number }> {
  * Split out from the sampler so the delta arithmetic — the part with an actual
  * bug surface — is testable without a kernel.
  */
-export function throttleDelta(
+function throttleDelta(
   prev: { count?: number; totalMs?: number } | undefined,
   cur: { count?: number; totalMs?: number },
   elapsedMs: number,
@@ -230,7 +230,7 @@ async function readPsi(kind: string): Promise<number | undefined> {
   return m ? Number(m[1]) : undefined;
 }
 
-export function parseMeminfo(text: string): Record<string, number> {
+function parseMeminfo(text: string): Record<string, number> {
   const out: Record<string, number> = {};
   for (const line of text.split("\n")) {
     const m = /^(\w+):\s+(\d+) kB/.exec(line);

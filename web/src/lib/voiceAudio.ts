@@ -6,7 +6,7 @@
  * mic with echo cancellation — without it the agent hears itself and answers.
  */
 
-export const SAMPLE_RATE = 24_000;
+const SAMPLE_RATE = 24_000;
 const PLAYBACK_LEAD_SECONDS = 0.06;
 const DUCKED = 0.22;
 

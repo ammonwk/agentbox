@@ -91,7 +91,7 @@ const INJECTED_PREFIX = /^\s*(# AGENTS\.md instructions|<(environment_context|us
  *  for tags not listed above. */
 const WHOLE_TAG = /^\s*<([A-Za-z_][\w-]*)\b[^>]*>[\s\S]*<\/\1>\s*$/;
 
-export function codexUserPrompt(content: unknown): { text: string; images: number } | null {
+function codexUserPrompt(content: unknown): { text: string; images: number } | null {
   if (!Array.isArray(content)) return null;
   let images = 0;
   const parts: string[] = [];
@@ -135,7 +135,7 @@ export function codexCredits(credits: any): CreditReading | null {
  * the account's own limit; others (e.g. "codex_bengalfox", limit_name
  * "GPT-5.3-Codex-Spark") are per-model limits.
  */
-export function codexWindows(rl: any): UsageWindow[] {
+function codexWindows(rl: any): UsageWindow[] {
   if (!rl || typeof rl !== "object") return [];
   const limitId = typeof rl.limit_id === "string" ? rl.limit_id : "codex";
   const scoped = limitId !== "codex";
@@ -202,7 +202,7 @@ export function codexUsage(u: any): Usage {
  * versions sent an `error` event with the same text. A per-minute API
  * "Rate limit reached for <model> … (TPM)" is transient and not counted.
  */
-export function isUsageLimit(e: any): boolean {
+function isUsageLimit(e: any): boolean {
   if (!e || typeof e !== "object") return false;
   if (JSON.stringify(e.codex_error_info ?? "").includes("usage_limit")) return true;
   return /hit your usage limit|usage limit (reached|exceeded)/i.test(String(e.message ?? ""));
@@ -214,7 +214,7 @@ export function isUsageLimit(e: any): boolean {
  * codex_error_info: "server_overloaded"}`. Codex gives up on the turn and
  * waits; the capacity comes back by itself, in a minute or in many.
  */
-export function isAtCapacity(e: any): boolean {
+function isAtCapacity(e: any): boolean {
   if (!e || typeof e !== "object") return false;
   if (JSON.stringify(e.codex_error_info ?? "").includes("server_overloaded")) return true;
   return /model is at capacity/i.test(String(e.message ?? ""));
@@ -230,7 +230,7 @@ const PROMPT_CAP = 2000;
  *  of its own (as the timeline reads it, `Timeline.tsx`). */
 const MEM_CITE = /(?:^|\n)[ \t]*<oai-mem-citation>[\s\S]*?(?:<\/oai-mem-citation>|(?![\s\S]))/g;
 
-export class CodexFold {
+class CodexFold {
   private lineage: CodexLineage | null = null;
   private cwd: string | null = null;
   private model: string | null = null;
@@ -502,14 +502,14 @@ function patchFiles(patch: string): string {
   return out.length ? out.join(", ") : oneLine(patch, 100);
 }
 
-export function codexToolName(p: any): string {
+function codexToolName(p: any): string {
   const name = String(p?.name ?? p?.type ?? "tool");
   const ns = typeof p?.namespace === "string" ? p.namespace : "";
   if (!ns) return name;
   return ns.startsWith("mcp__") ? `${ns}__${name}` : `${ns}.${name}`;
 }
 
-export function summarizeCodexTool(name: string, input: any): string {
+function summarizeCodexTool(name: string, input: any): string {
   const i = input ?? {};
   switch (name) {
     case "exec": {
@@ -566,7 +566,7 @@ export function summarizeCodexTool(name: string, input: any): string {
  * exec chunk says "Process exited with code N". Older rollouts wrapped output
  * as `{"output": "...", "metadata": {"exit_code": N}}`.
  */
-export function codexOutput(raw: unknown): { text: string; error: boolean } {
+function codexOutput(raw: unknown): { text: string; error: boolean } {
   let text = contentText(raw);
   if (!text && raw && typeof raw === "object" && !Array.isArray(raw)) text = JSON.stringify(raw);
   let exit: number | null = null;
@@ -665,7 +665,7 @@ function codexRefusal(id: string, at: number, e: unknown): Piece | null {
 
 /** Timeline pieces for one rollout record. Records carry no uuid of their
  *  own, but a record's index never changes in an append-only file. */
-export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, i: number): boolean }): Piece[] {
+function codexPieces(r: any, index: number, fold?: { isInherited(r: any, i: number): boolean }): Piece[] {
   if (!r || typeof r !== "object") return [];
   if (fold?.isInherited(r, index)) return [];
   const at = ms(r.timestamp) ?? 0;
@@ -760,7 +760,7 @@ export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, 
   }
 }
 
-export function codexLinks(r: any): { calls?: string[]; results?: string[] } | null {
+function codexLinks(r: any): { calls?: string[]; results?: string[] } | null {
   if (r?.type !== "response_item") return null;
   const p = r.payload ?? {};
   switch (p.type) {

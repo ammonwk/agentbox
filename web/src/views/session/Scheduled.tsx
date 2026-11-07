@@ -19,7 +19,7 @@ export function scheduleTitle(sc: Schedule): string {
 }
 
 /** "in 4h", ticking. */
-export function Until({ at }: { at: number | null }) {
+function Until({ at }: { at: number | null }) {
   const label = useSyncExternalStore(subscribeToClock, () => (at === null ? "—" : until(at, clockNow())));
   return <time dateTime={at ? new Date(at).toISOString() : undefined}>{label}</time>;
 }

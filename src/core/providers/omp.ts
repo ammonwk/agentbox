@@ -42,7 +42,6 @@ import {
   type OmpState,
   type ToolOutcome,
 } from "./omp-transcript";
-import { ompRedirectVars } from "./omp-usage";
 import { ompContextLimit } from "./omp-models";
 import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
 import { ensureBridge } from "../../bridge/service";
@@ -59,7 +58,17 @@ import type {
   TranscriptRef,
 } from "./types";
 
-export { ompUsage, parseOmpUsage } from "./omp-usage";
+/** What must not leak into an omp from the server's shell: anything that
+ *  points it at another data dir (see `ompAccountCommand`). */
+const OMP_REDIRECT_VARS = [
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_CACHE_HOME",
+  "OMP_PROFILE",
+  "PI_PROFILE",
+  "PI_CODING_AGENT_SESSION_DIR",
+] as const;
+const ompRedirectVars = (): string[] => [...OMP_REDIRECT_VARS];
 
 const TITLE_SLOT_BYTES = 256;
 const DEFAULT_PAGE = 50;
@@ -70,7 +79,7 @@ export function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || join(userHome(), ".omp", "agent");
 }
 
-export function sessionsRoot(): string {
+function sessionsRoot(): string {
   return join(agentDir(), "sessions");
 }
 
@@ -83,7 +92,7 @@ function canonical(p: string): string {
 }
 
 /** The slug directory omp would use for `cwd`. */
-export function slugDirFor(root: string, cwd: string): string {
+function slugDirFor(root: string, cwd: string): string {
   return join(root, ompSlug(canonical(cwd), canonical(homedir()), canonical(tmpdir())));
 }
 
@@ -173,7 +182,7 @@ const NON_SESSION_COMMANDS = new Set([
 /** Where omp's own arguments start in argv, or -1 if this is not omp. The
  *  global install is a bun script, so it shows up as `bun …/bin/omp` — or as
  *  `bun …/pi-coding-agent/dist/cli.js` when launched by path. */
-export function ompArgStart(argv: string[]): number {
+function ompArgStart(argv: string[]): number {
   if (argv.length === 0) return -1;
   const a0 = basename(argv[0]!);
   if (a0 === "omp") return 1;
@@ -184,7 +193,7 @@ export function ompArgStart(argv: string[]): number {
 }
 
 /** True when argv is an omp that hosts an agent session. */
-export function isOmpSessionArgv(argv: string[]): boolean {
+function isOmpSessionArgv(argv: string[]): boolean {
   const k = ompArgStart(argv);
   if (k < 0) return false;
   const first = argv[k];
@@ -196,7 +205,7 @@ export function isOmpSessionArgv(argv: string[]): boolean {
 }
 
 /** `-r <id>` / `--resume <id>` / `--resume=<id>` from omp's argv. */
-export function resumeArg(argv: string[]): string | null {
+function resumeArg(argv: string[]): string | null {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--") break;
@@ -239,7 +248,7 @@ interface OmpProc {
  *  5. for one started without a prompt (in your own terminal), the newest
  *     such file not already claimed.
  */
-export function attributeOmp(
+function attributeOmp(
   procs: OmpProc[],
   root: string,
   filesWritten: (pid: number, keep: (path: string) => boolean) => string[],
@@ -432,7 +441,7 @@ function agentLogsUnder(dir: string, depth = 0): string[] {
 }
 
 /** The parent session id when `path` lies inside a session's subagent dir. */
-export function parentFromPath(path: string): string | null {
+function parentFromPath(path: string): string | null {
   const parts = path.split(sep);
   for (let i = parts.length - 2; i >= 0; i--) {
     const m = /^\d{4}-\d\d-\d\dT[\d-]+Z_([0-9a-f-]{8,})$/i.exec(parts[i]!);
@@ -826,7 +835,7 @@ function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | 
 }
 
 /** The model omp's config gives a session started without one: `modelRoles.default`. */
-export function defaultModelIn(configYml: string): string | null {
+function defaultModelIn(configYml: string): string | null {
   try {
     const m = (Bun.YAML.parse(configYml) as { modelRoles?: { default?: unknown } } | null)?.modelRoles?.default;
     return typeof m === "string" && m ? m : null;

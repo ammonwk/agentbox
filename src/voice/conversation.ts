@@ -24,7 +24,7 @@ import { TOOLS, type VoiceTools } from "./tools";
 
 export type VoiceState = "connecting" | "listening" | "thinking" | "speaking";
 
-export type VoiceServerMessage =
+type VoiceServerMessage =
   | { type: "state"; state: VoiceState; muted: boolean }
   | { type: "heard"; text: string; final: boolean }
   | { type: "said"; text: string }

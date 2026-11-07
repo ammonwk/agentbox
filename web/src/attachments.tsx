@@ -40,7 +40,7 @@ export function tokensIn(text: string): Set<number> {
 }
 
 /** Drop a token and one space beside it, so removing it leaves no gap. */
-export function removeToken(text: string, n: number): string {
+function removeToken(text: string, n: number): string {
   const t = tokenOf(n);
   const i = text.indexOf(t);
   if (i < 0) return text;

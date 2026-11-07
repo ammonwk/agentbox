@@ -42,7 +42,7 @@ export function run(cmd: string[], cwd?: string, env?: Record<string, string>): 
 }
 
 /** Exit code we synthesise when the executable itself is not on PATH. */
-export const MISSING_BINARY = 127;
+const MISSING_BINARY = 127;
 
 /**
  * `run`, without blocking the event loop, so callers can have several in
@@ -473,7 +473,7 @@ export function listWorktreesOf(repoPath: string): WorktreeEntry[] {
  * is. A directory without a HEAD is not a repository, and git looks on up; a
  * worktree whose git dir was deleted is none.
  */
-export function checkoutAt(dir: string): { top: string; gitDir: string } | null {
+function checkoutAt(dir: string): { top: string; gitDir: string } | null {
   for (let top = resolve(dir); ; top = dirname(top)) {
     const dotGit = join(top, ".git");
     let st;
@@ -665,7 +665,7 @@ export function repoFullNameOf(path: string): string | null {
 }
 
 /** Exported for tests: the pure half of `repoFullNameOf`. */
-export function slugFromRemoteUrl(url: string): string | null {
+function slugFromRemoteUrl(url: string): string | null {
   if (!url) return null;
   const remote = parseRemote(url);
   if (!remote) return null;

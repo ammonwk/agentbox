@@ -20,7 +20,7 @@ import { JsonlTranscriptReader, type TranscriptFormat } from "./providers/jsonl-
 import { describe, isToolShell, sharedProcTable, subtree, type ProcTable } from "./proc";
 import { classifyShell, normalCommand, shellCommand, SUBAGENT_QUIET_MS, type ShellKind } from "./park";
 
-export interface WorkShell {
+interface WorkShell {
   pid: number;
   /** The command, without the tool-call wrapper. */
   command: string;
@@ -32,7 +32,7 @@ export interface WorkShell {
   kind: ShellKind;
 }
 
-export interface WorkAgent {
+interface WorkAgent {
   id: string;
   /** What the agent was asked to do, in the caller's words. */
   description: string;
@@ -43,7 +43,7 @@ export interface WorkAgent {
   since: number;
 }
 
-export interface WorkWorkflow {
+interface WorkWorkflow {
   runId: string;
   /** The workflow's `meta.name`. */
   name: string;
@@ -215,7 +215,7 @@ const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
  * or `subagents/workflows/<run>/agent-<id>.jsonl` for one a workflow runs.
  * Null for an id that is not one, and for one that has no file there.
  */
-export function agentFile(sessionDir: string, agentId: string): string | null {
+function agentFile(sessionDir: string, agentId: string): string | null {
   if (!AGENT_ID.test(agentId)) return null;
   const subs = join(sessionDir, "subagents");
   const own = join(subs, `agent-${agentId}.jsonl`);

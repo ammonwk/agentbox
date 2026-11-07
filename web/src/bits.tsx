@@ -3,7 +3,7 @@
  *  live in components.tsx; these know what a session and an account are. */
 
 import { useEffect, useRef, useState } from "react";
-import type { AccountView, ProviderId, SessionHost, UsageWindow } from "../../src/core/types";
+import type { AccountView, ProviderId, UsageWindow } from "../../src/core/types";
 import { Icon } from "./components";
 import { contextPct, type Shape, type ShownStatus, type WaitingOn } from "./lib/board";
 import { fmtTokens } from "./lib/format";
@@ -145,16 +145,6 @@ const STATUS_TITLE: Record<ShownStatus, string> = {
   closed: "Stopped and off the list; still resumable",
 };
 
-/** `work` is what it left running in the background (SessionRow.backgroundWork). */
-export function StatusPill({ status, work }: { status: ShownStatus; work?: string | null }) {
-  return (
-    <span className={`pill pill-${status}`} title={work ? `Running ${work}: its turn is over, and that work runs inside its process` : STATUS_TITLE[status]}>
-      <span className="pill-dot" aria-hidden="true" />
-      {work ? `Running ${work}` : STATUS_LABEL[status]}
-    </span>
-  );
-}
-
 const SHAPE_PATH: Record<Shape, string> = {
   circle: "M5 1a4 4 0 1 1 0 8 4 4 0 0 1 0-8z",
   square: "M2.3 1.3h5.4a1 1 0 0 1 1 1v5.4a1 1 0 0 1-1 1H2.3a1 1 0 0 1-1-1V2.3a1 1 0 0 1 1-1z",
@@ -224,23 +214,6 @@ export function StatusDot({ status, shape, repo, copy, work }: { status: ShownSt
         <span className={`st-dot st-${status}`} aria-hidden="true" />
       )}
     </button>
-  );
-}
-
-const HOST_LABEL: Record<SessionHost, string> = { tmux: "tmux", external: "external", subagent: "subagent", none: "no process" };
-const HOST_TITLE: Record<SessionHost, string> = {
-  tmux: "In agentbox's tmux — attach from a terminal or type here",
-  external: "Running in a terminal agentbox did not start — read-only until adopted",
-  subagent: "Run by its parent session's subagent MCP — read-only, and it stops when the parent does",
-  none: "No live process",
-};
-
-export function HostBadge({ host }: { host: SessionHost }) {
-  return (
-    <span className={`host host-${host}`} title={HOST_TITLE[host]}>
-      {host === "tmux" ? <Icon.terminal size={12} /> : host === "external" || host === "subagent" ? <Icon.external size={12} /> : null}
-      {HOST_LABEL[host]}
-    </span>
   );
 }
 

@@ -28,7 +28,7 @@ export class Held extends Error {
   }
 }
 
-export interface Check {
+interface Check {
   name: string;
   /** A stable identity for this run of this check, so a re-run counts as fresh. */
   key?: string;
@@ -187,7 +187,7 @@ const feedbackPages = new Map<string, { etag: string | null; marks: string[]; ne
 
 /** Review text stays on GitHub. Persist only a digest so edits and new replies
  * wake the owner once, including comments inside previously resolved threads. */
-export async function readPrFeedback(repo: string, number: number): Promise<{ fingerprint: string; count: number }> {
+async function readPrFeedback(repo: string, number: number): Promise<{ fingerprint: string; count: number }> {
   const surfaces = [`pulls/${number}/reviews`, `pulls/${number}/comments`, `issues/${number}/comments`];
   const rows = await Promise.all(surfaces.map(async surface => {
     const marks: string[] = [];

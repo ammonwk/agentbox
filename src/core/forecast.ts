@@ -35,29 +35,29 @@ const MIN = 60_000;
 const DAY = 86_400_000;
 
 /** A quiet gap this long ends a stretch. */
-export const STRETCH_GAP_MS = 60 * MIN;
+const STRETCH_GAP_MS = 60 * MIN;
 /** "Lately", for the first predictor. */
 const RECENT_MS = 10 * MIN;
 /** A stretch is read this often when fitting, so the table is an average over time. */
 const STEP_MS = 5 * MIN;
 /** Cost-equivalent spent in the last ten minutes: nothing, a trickle, working, working hard, flat out. */
-export const RECENT_EDGES = [0.001, 0.2, 1, 4];
+const RECENT_EDGES = [0.001, 0.2, 1, 4];
 /** Cost-equivalent spent so far this stretch. */
-export const SO_FAR_EDGES = [0.1, 1, 4, 16, 64];
+const SO_FAR_EDGES = [0.1, 1, 4, 16, 64];
 /** A pair of buckets seen in fewer stretches than this says nothing yet. */
 const MIN_STRETCHES = 20;
 /** A session whose first sample comes this soon after it started had spent
  *  nothing before; any later, what it holds was spent before we looked. */
 const FRESH_MS = 5 * MIN;
 
-export interface Sample {
+interface Sample {
   at: number;
   /** Cumulative cost-equivalent. */
   cost: number;
 }
 
 /** The two predictors, in cost-equivalent. */
-export interface Reading {
+interface Reading {
   recent: number;
   soFar: number;
 }
@@ -83,7 +83,7 @@ function baseOf(samples: Sample[], i: number, startedAt: number): number {
  * over an hour old — unless it is `open`, mid-turn, when a long silence is a
  * long tool call and the stretch goes on.
  */
-export function readingAt(samples: Sample[], startedAt: number, now: number, open = false): Reading | null {
+function readingAt(samples: Sample[], startedAt: number, now: number, open = false): Reading | null {
   let end = samples.length - 1;
   while (end >= 0 && samples[end]!.at > now) end--;
   if (end < 0 || (!open && now - samples[end]!.at > STRETCH_GAP_MS)) return null;
@@ -117,7 +117,7 @@ export type StartTable = Map<string, { sum: number; stretches: number }>;
 
 const startKey = (provider: string, family: string, first: boolean): string => `${provider}|${family}|${first ? 1 : 0}`;
 
-export interface SessionSeries {
+interface SessionSeries {
   provider: string;
   startedAt: number;
   samples: Sample[];
@@ -148,7 +148,7 @@ function* stretchesOf(s: SessionSeries, until: number): Generator<{ i: number; j
  * stretch when the balancer placed it, and every later one (a wake) whoever
  * started it.
  */
-export function fitStarts(sessions: SessionSeries[], until: number): StartTable {
+function fitStarts(sessions: SessionSeries[], until: number): StartTable {
   const table: StartTable = new Map();
   for (const s of sessions) {
     for (const { i, final } of stretchesOf(s, until)) {
@@ -168,7 +168,7 @@ export function fitStarts(sessions: SessionSeries[], until: number): StartTable 
 /** Cost-equivalent a stretch on `provider` is expected to spend from its
  *  start: the average of `model`'s family, or with `model` absent of every
  *  model's. Null where too few have run to say. */
-export function startCost(table: StartTable, provider: string, first: boolean, model?: string | null): number | null {
+function startCost(table: StartTable, provider: string, first: boolean, model?: string | null): number | null {
   const cell = table.get(startKey(provider, model === undefined ? "*" : familyOf(model), first));
   return cell && cell.stretches >= MIN_STRETCHES ? cell.sum / cell.stretches : null;
 }
@@ -179,7 +179,7 @@ export function startCost(table: StartTable, provider: string, first: boolean, m
  * kept twice: under its provider, and under `*` for a provider with too
  * little history of its own.
  */
-export function fitForecast(sessions: SessionSeries[], until: number): ForecastTable {
+function fitForecast(sessions: SessionSeries[], until: number): ForecastTable {
   const table: ForecastTable = new Map();
   for (const s of sessions) {
     const xs = s.samples;
@@ -211,7 +211,7 @@ export function fitForecast(sessions: SessionSeries[], until: number): ForecastT
 
 /** Cost-equivalent a session reading `r` is expected to still spend this
  *  stretch: its provider's average, else every provider's, else unknown. */
-export function expectedCost(table: ForecastTable, provider: string, r: Reading): number | null {
+function expectedCost(table: ForecastTable, provider: string, r: Reading): number | null {
   for (const p of [provider, "*"]) {
     const cell = table.get(keyOf(p, r));
     if (cell && cell.stretches >= MIN_STRETCHES) return cell.sum / cell.readings;

@@ -60,7 +60,7 @@ export function closeDb(): void {
  * v1's `agentbox.db` is a different file (`box.db` is v2's), so none of v1's
  * ad-hoc column patching carries over.
  */
-export const MIGRATIONS: readonly string[] = [
+const MIGRATIONS: readonly string[] = [
   // 1 — the v2 schema.
   `
   CREATE TABLE settings (
@@ -1454,7 +1454,7 @@ function rowToRepo(r: RepoRow): Repo {
   };
 }
 
-export function insertRepo(r: Repo) {
+function insertRepo(r: Repo) {
   getDb().run(
     "INSERT OR IGNORE INTO repos (id,ref,kind,display_name,full_name,default_branch,added_at) VALUES (?,?,?,?,?,?,?)",
     [r.id, r.ref, r.kind, r.displayName, r.fullName, r.defaultBranch, r.addedAt]
@@ -1479,7 +1479,7 @@ export function getRepoById(id: string): Repo | null {
 
 /** Look a repo up by the `ref` a Session stores. Sessions record the ref, not
  *  the id, so this is the lookup the engine needs to find a session's repo. */
-export function getRepo(ref: string): Repo | null {
+function getRepo(ref: string): Repo | null {
   const row = getDb().query("SELECT * FROM repos WHERE ref = ?").get(ref) as RepoRow | null;
   return row ? rowToRepo(row) : null;
 }
@@ -1574,14 +1574,14 @@ function remoteDefaultBranch(slug: string): string {
 
 // -------------------------------------------------------------- settings
 
-export const DEFAULT_BALANCER: BalancerSettings = {
+const DEFAULT_BALANCER: BalancerSettings = {
   claimNormal: 1.5,
   claimIdleMin: 60,
   resetHorizonMin: 60,
   shortLoadPct: 50,
 };
 
-export const DEFAULT_SETTINGS: AgentSettings = {
+const DEFAULT_SETTINGS: AgentSettings = {
   theme: "system",
   repoMark: "name",
   splitActive: true,

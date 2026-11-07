@@ -47,7 +47,7 @@ export class McpError extends Error {
 }
 
 export const mcpDir = (): string => join(agentboxHome(), "mcp");
-export const registryPath = (): string => join(mcpDir(), "servers.json");
+const registryPath = (): string => join(mcpDir(), "servers.json");
 
 /** The directory the list and the CLIs' files live in, private. */
 export function ensureMcpDir(): string {
@@ -99,7 +99,7 @@ function writeRegistry(r: Registry): void {
   writePrivate(registryPath(), `${JSON.stringify(r, null, 2)}\n`);
 }
 
-export function enabledServers(): McpServer[] {
+function enabledServers(): McpServer[] {
   return readRegistry().servers.filter((s) => s.enabled);
 }
 
@@ -137,7 +137,7 @@ function text(v: unknown, what: string, max: number): string {
  * or header entry with no `value` keeps the saved value of that name, so an
  * edit never needs a secret the page was never shown.
  */
-export function parseServer(body: McpServerInput, saved: McpServer | null, now: number): McpServer {
+function parseServer(body: McpServerInput, saved: McpServer | null, now: number): McpServer {
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!NAME.test(name)) throw new McpError(400, "the name must be 1–64 letters, digits, - or _, starting with a letter or digit");
   const transport = body.transport;
@@ -210,7 +210,7 @@ const PRUNE_GRACE_MS = 10 * 60_000;
  * `PRUNE_GRACE_MS`. Without a process table to read, nothing is deleted.
  * The current list's snapshots are written again by the next launch.
  */
-export function pruneMcpFiles(now = Date.now()): void {
+function pruneMcpFiles(now = Date.now()): void {
   const dir = mcpDir();
   rmSync(`${registryPath()}.bak`, { force: true });
   let names: string[];

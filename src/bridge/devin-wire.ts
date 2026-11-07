@@ -42,7 +42,7 @@ import * as pb from "./pb";
 
 // ---------------------------------------------------------------- envelopes
 
-export function envelope(flags: number, payload: Uint8Array): Uint8Array {
+function envelope(flags: number, payload: Uint8Array): Uint8Array {
   const out = new Uint8Array(5 + payload.length);
   out[0] = flags;
   new DataView(out.buffer).setUint32(1, payload.length);
@@ -51,7 +51,7 @@ export function envelope(flags: number, payload: Uint8Array): Uint8Array {
 }
 
 /** The payloads of a complete enveloped body, decompressed. */
-export function envelopes(body: Uint8Array): { flags: number; payload: Uint8Array }[] {
+function envelopes(body: Uint8Array): { flags: number; payload: Uint8Array }[] {
   const out: { flags: number; payload: Uint8Array }[] = [];
   const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
   for (let i = 0; i + 5 <= body.length; ) {
@@ -136,13 +136,13 @@ export function withAllowedModels(settings: Uint8Array, uids: string[]): Uint8Ar
 
 // ---------------------------------------------------------------- chat request
 
-export interface ChatToolCall {
+interface ChatToolCall {
   id: string;
   name: string;
   arguments: string;
 }
 
-export interface ChatMessage {
+interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   text: string;
   toolCalls: ChatToolCall[];

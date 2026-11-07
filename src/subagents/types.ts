@@ -14,7 +14,7 @@ export type ToolKind =
 
 export type ToolStatus = "pending" | "running" | "ok" | "error";
 
-export type SubagentStatus = "pending" | "running" | "completed" | "failed";
+type SubagentStatus = "pending" | "running" | "completed" | "failed";
 
 /**
  * One of omp's own in-process subagents, as its progress stream describes it

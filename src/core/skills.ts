@@ -68,7 +68,7 @@ export function skillRoots(repoDirs: string[] = []): SkillRoot[] {
  * discarded. A real YAML parser is far more surface than one field needs, so
  * this handles the subset that actually appears and nothing else.
  */
-export function parseFrontmatter(text: string): {
+function parseFrontmatter(text: string): {
   name?: string;
   description?: string;
   allowedTools?: string;
@@ -228,7 +228,7 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
  * `../../Documents` onto the skills root is how v1's demote could be asked to
  * delete a home directory.
  */
-export function validSkillName(name: string): boolean {
+function validSkillName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !name.includes("..");
 }
 

@@ -57,10 +57,10 @@ const TELL_EVERY_MS = 60_000;
 /** How long an ended wait keeps trying to tell a session that is stopped or closed. */
 export const TELL_FOR_MS = 24 * 3_600_000;
 const MAX_PER_SESSION = 20;
-export const MIN_TIMEOUT_MS = 60_000;
-export const MAX_TIMEOUT_MS = 7 * 24 * 3_600_000;
+const MIN_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 7 * 24 * 3_600_000;
 /** The backstop for a wait armed without --timeout: short, so a stuck one is looked into. */
-export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 
 type Ending = { how: Exclude<WaitEnd, "cancelled" | "timeout">; text: string };
 /** One look: how it ends the wait, or what it saw and hands the next look. */
@@ -157,7 +157,7 @@ export function parseSpec(raw: unknown): WaitSpec {
 /** A check name asked for takes the checks it names and their shards: `API Tests (shard 1/3)`. */
 const named = (check: string, asked: string): boolean => check.toLowerCase() === asked.toLowerCase() || check.toLowerCase().startsWith(`${asked.toLowerCase()} `);
 
-export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo"], pr: PrRead, createdAt: number, now: number): Look {
+function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo"], pr: PrRead, createdAt: number, now: number): Look {
   const name = `PR #${spec.number}`;
   if (pr.state === "MERGED") return { end: { how: "happened", text: `${name} merged.` } };
   if (pr.state === "CLOSED") return { end: { how: "stuck", text: `${name} was closed without merging.` } };
@@ -251,12 +251,12 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
   return { seen: `waiting on ${list(owed)} on ${short(pr.head)}`, memo: base };
 }
 
-export function lookRun(spec: Extract<WaitSpec, { kind: "run" }>, run: RunRead): Look {
+function lookRun(spec: Extract<WaitSpec, { kind: "run" }>, run: RunRead): Look {
   if (run.status !== "completed") return { seen: `${run.name || "run"} is ${run.status || "not started"}` };
   return { end: { how: "happened", text: `Run ${spec.run} (${run.name}, on ${short(run.head)}) concluded: ${(run.conclusion || "no conclusion").toUpperCase()}. ${run.url}` } };
 }
 
-export function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["memo"], job: JobRead, now: number): Look {
+function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["memo"], job: JobRead, now: number): Look {
   const log = `Its output: ${spec.log}`;
   if (job.result) {
     const { result, code, status } = job.result;
@@ -275,7 +275,7 @@ export function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["me
 
 const IDLE: Session["status"][] = ["waiting", "blocked", "stopped", "closed"];
 
-export function lookSessions(spec: Extract<WaitSpec, { kind: "session" }>, memo: Wait["memo"], of: (id: string) => Session | null, now: number): Look {
+function lookSessions(spec: Extract<WaitSpec, { kind: "session" }>, memo: Wait["memo"], of: (id: string) => Session | null, now: number): Look {
   const states = spec.ids.map((id) => ({ id, s: of(id) }));
   const idle = states.filter(({ s }) => !s || IDLE.includes(s.status));
   if (idle.length === 0) return { seen: `${spec.ids.join(", ")} ${spec.ids.length === 1 ? "is" : "are"} mid-turn`, memo: {} };
@@ -291,7 +291,7 @@ export function lookSessions(spec: Extract<WaitSpec, { kind: "session" }>, memo:
 }
 
 /** What the session is told: one note, whole, so it reads as agentbox's own. */
-export function message(w: Wait, now: number): string {
+function message(w: Wait, now: number): string {
   const head = { happened: "HAPPENED", stuck: "CANNOT HAPPEN", timeout: "TIMED OUT", broken: "THE WAIT FAILED", cancelled: "CANCELLED" }[w.ended!];
   const late = w.endedAt && now - w.endedAt > 2 * 60_000 ? ` (It ended ${span(now - w.endedAt)} ago; you could not be told until now.)` : "";
   // `]` then a newline would end the note early for whoever reads it as one.

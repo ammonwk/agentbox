@@ -16,7 +16,7 @@ const MAX_PATCH_FILES = 400;
 
 /** Which branch a session's work is judged against: the default branch of the
  *  repository its directory belongs to. */
-export function baseFor(session: Session): string {
+function baseFor(session: Session): string {
   const root = session.repoRoot;
   if (!root) return "main";
   // Cached: resolving can ask the remote, and `agentbox diff` may be asked often.

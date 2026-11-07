@@ -583,7 +583,7 @@ function AccountUsage({ accountId, accounts, cold }: { accountId: string | null;
   );
 }
 
-export function Detail({
+function Detail({
   session,
   state,
   tab,
@@ -1235,7 +1235,7 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
 }
 
 /** " agentbox retries it at 1:51 AM (in 4m), try 2 of 3 — or send it something yourself." */
-export function AutoResumeNote({ auto, now, what }: { auto: NonNullable<SessionRow["autoResume"]>; now: number; what: string }) {
+function AutoResumeNote({ auto, now, what }: { auto: NonNullable<SessionRow["autoResume"]>; now: number; what: string }) {
   const nth = auto.of === 1 ? "" : auto.of === null ? (auto.attempt > 1 ? `, try ${auto.attempt}` : "") : `, try ${auto.attempt} of ${auto.of}`;
   return (
     <span className="sx-auto-resume">

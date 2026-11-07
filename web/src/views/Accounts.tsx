@@ -768,7 +768,7 @@ const LOGIN_STATE: Record<LoginFlow["state"], string> = {
  * asked for — a URL to open, a device code to type (Codex), or a box to paste
  * the code the browser hands back (Claude, Devin).
  */
-export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () => void }) {
+function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () => void }) {
   const [paste, setPaste] = useState("");
   const { run, busy, error } = useAction();
   const over = l.state === "done" || l.state === "failed";

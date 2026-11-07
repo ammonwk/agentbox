@@ -57,7 +57,7 @@ const clip = (s: string | null | undefined, n: number) => {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 };
 
-export const titleOf = (s: Session): string =>
+const titleOf = (s: Session): string =>
   s.label?.trim() || s.title?.trim() || s.firstPrompt?.split("\n")[0]?.slice(0, 80) || "untitled";
 
 /** How long a single bash call may take before it is killed. */

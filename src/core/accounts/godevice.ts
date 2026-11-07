@@ -15,7 +15,7 @@
 
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "./gocred";
 
-export const CONSOLE = "https://opencode.ai/console";
+const CONSOLE = "https://opencode.ai/console";
 const CLIENT_ID = "opencode-cli";
 /** Refresh this long before the access token runs out. The org's store
  *  refreshes a pooled sign-in on the same clock (org/accounts.ts). */
@@ -51,7 +51,7 @@ async function get<T>(f: Fetch, url: string, access: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export interface DeviceCode {
+interface DeviceCode {
   deviceCode: string;
   userCode: string;
   url: string;

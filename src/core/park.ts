@@ -56,7 +56,7 @@ export const PARK_CHECK_MS = 60_000;
 export const PARK_STARTUP_MS = 5 * 60_000;
 /** A dev server or tunnel keeps its session up this long after the
  *  conversation goes quiet. */
-export const SERVICE_GRACE_MS = 4 * 3_600_000;
+const SERVICE_GRACE_MS = 4 * 3_600_000;
 /**
  * A turn this quiet is over, whatever the CLI says. Claude's own status file
  * can say "busy" for a day and more — a lead with teammates, or one parked on
@@ -68,7 +68,7 @@ export const STALE_TURN_MS = 2 * 3_600_000;
 /** A background command that has only been sleeping between checks keeps
  *  its session up this long after the conversation goes quiet. Anything it
  *  was waiting on has had a day; one still polling is taken to be stuck. */
-export const POLL_MAX_MS = 24 * 3_600_000;
+const POLL_MAX_MS = 24 * 3_600_000;
 /** A subagent that wrote to its transcript this recently is still working;
  *  long, because one large generation (a big Write, long thinking) writes
  *  nothing until it ends. */
@@ -77,12 +77,12 @@ export const SUBAGENT_QUIET_MS = 30 * 60_000;
  *  long is hung (a connection nobody closes, a promise nobody settles) and
  *  holds nothing. Counted from when this server first saw it still, so a
  *  restart starts the count over. */
-export const STUCK_WORK_MS = 24 * 3_600_000;
+const STUCK_WORK_MS = 24 * 3_600_000;
 /** How soon a session whose turn ended `STATUS: done` is parked. */
 export const DONE_IDLE_MS = 60_000;
 /** A wake this overdue is taken to have fired (or died). Wakeups land late
  *  on a loaded machine; the turn they start is activity anyway. */
-export const WAKE_GRACE_MS = 10 * 60_000;
+const WAKE_GRACE_MS = 10 * 60_000;
 
 // ---------------------------------------------------------------- shells
 
@@ -334,7 +334,7 @@ export function subagentWorking(text: string): boolean {
 /** A session sitting on notifications Claude never delivered (TranscriptFacts
  *  `stranded`) is told about them after this long quiet: inside the hour its
  *  prompt cache lasts, and before it would be parked. */
-export const STRANDED_NUDGE_MS = 55 * 60_000;
+const STRANDED_NUDGE_MS = 55 * 60_000;
 /** ...or this long before parking, where `parkIdleMin` is set shorter. */
 const STRANDED_LEAD_MS = 5 * 60_000;
 

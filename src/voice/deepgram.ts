@@ -7,7 +7,7 @@
  * speaking are two sockets rather than their Voice Agent.
  */
 
-export const SAMPLE_RATE = 24_000;
+const SAMPLE_RATE = 24_000;
 /** Flux asks for 80 ms chunks; the browser sends 20 ms frames. */
 const FLUX_CHUNK_BYTES = (SAMPLE_RATE * 2 * 80) / 1000;
 

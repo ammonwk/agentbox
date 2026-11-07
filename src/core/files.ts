@@ -18,7 +18,7 @@ export class FileError extends Error {
 
 /** Text past this is cut, with the viewer saying so: a phone renders a
  *  megabyte of lines, not a log of a hundred. */
-export const MAX_TEXT_BYTES = 1024 * 1024;
+const MAX_TEXT_BYTES = 1024 * 1024;
 
 /** The file or directory `ref` names, as an agent wrote it: absolute, `~/…`,
  *  `file://…`, or relative, with any `:line` suffix dropped. A relative path
@@ -55,7 +55,7 @@ export function readDirs(cwd: string | null, dirs: readonly string[] = []): stri
 
 const home = (p: string) => (p === "~" || p.startsWith("~/") ? userHome() + p.slice(1) : p);
 
-export type FileKind = "markdown" | "text" | "pdf" | "html" | "image" | "binary" | "directory";
+type FileKind = "markdown" | "text" | "pdf" | "html" | "image" | "binary" | "directory";
 
 export interface FileView {
   path: string;

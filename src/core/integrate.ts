@@ -44,7 +44,7 @@ function readWork(path: string): Buffer | null {
 const same = (a: Buffer | null, b: Buffer | null) => (a === null || b === null ? a === b : a.equals(b));
 
 /** The checks, run in `dir` on the exact commit. Throws with the tail of what failed. */
-export function checkCommit(dir: string, log: (line: string) => void): void {
+function checkCommit(dir: string, log: (line: string) => void): void {
   for (const step of [["run", "typecheck"], ["test"]]) {
     log(`bun ${step.join(" ")} on the integrated commit`);
     const r = run(dir, [process.execPath, ...step]);

@@ -9,7 +9,7 @@ import { resolve } from "node:path";
  */
 
 /** `~` and `~/x` to the server's home; anything else as given, made absolute. */
-export function expandDir(p: string, home = homedir()): string {
+function expandDir(p: string, home = homedir()): string {
   const t = p.trim();
   const expanded = t === "~" ? home : t.startsWith("~/") ? home + t.slice(1) : t;
   return resolve(home, expanded);

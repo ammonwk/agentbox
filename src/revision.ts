@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
-export function sourceRevision(): { commit: string; dirty: boolean } | null {
+function sourceRevision(): { commit: string; dirty: boolean } | null {
   try {
     const options = { cwd: root, timeout: 2000, stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"], encoding: "utf8" as const };
     const commit = execFileSync("git", ["rev-parse", "HEAD"], options).trim();

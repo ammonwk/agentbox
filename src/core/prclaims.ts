@@ -39,12 +39,12 @@ export function parsePrRef(text: string, repo: string | null): { repo: string; n
 
 type PrRef = { repo: string; number: number };
 
-export function releasedPrs(sessionId: string): PrRef[] {
+function releasedPrs(sessionId: string): PrRef[] {
   return getDb().query("SELECT repo, number FROM pr_releases WHERE session_id = ? ORDER BY repo, number").all(sessionId) as PrRef[];
 }
 
 /** Who holds the PR now, and since when. */
-export function prHolder(pr: PrRef): { sessionId: string; at: number } | null {
+function prHolder(pr: PrRef): { sessionId: string; at: number } | null {
   const row = getDb().query("SELECT session_id, at FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").get(pr.repo, pr.number) as { session_id: string; at: number } | null;
   return row ? { sessionId: row.session_id, at: row.at } : null;
 }

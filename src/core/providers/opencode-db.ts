@@ -188,9 +188,3 @@ export function childrenOf(path: string, ids: readonly string[]): OpencodeChildR
         .all(...ids) as OpencodeChildRow[],
   );
 }
-
-/** For tests: drop cached handles so a fixture can be deleted. */
-export function closeOpencodeDbs(): void {
-  for (const h of handles.values()) h.db.close();
-  handles.clear();
-}

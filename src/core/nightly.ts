@@ -55,7 +55,7 @@ export function lastNightlyReclaim(): NightlyReclaim | null {
 
 /** One sweep. `sessions` is asked again before every removal: a session may
  *  have started in a worktree since the scan. */
-export async function reclaimNightly(sessions: () => Session[]): Promise<NightlyReclaim> {
+async function reclaimNightly(sessions: () => Session[]): Promise<NightlyReclaim> {
   const startedAt = Date.now();
   const out: NightlyReclaim = { startedAt, finishedAt: 0, removed: 0, bytesFreed: 0, kept: 0, failed: [], cutShort: false };
   const scan = await scanWorktrees("all", sessions(), { sizes: false, concurrency: 2 });

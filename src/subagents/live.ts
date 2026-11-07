@@ -37,7 +37,7 @@ import { argvOf } from "../core/proc";
  * this themselves off the timestamp in the file; the constant is here so they
  * agree.
  */
-export const STALE_AFTER_S = 15;
+const STALE_AFTER_S = 15;
 
 export interface LiveEntry {
   /** Unix seconds when the line was written. */
@@ -64,7 +64,7 @@ function encode(e: LiveEntry): string {
   return `${e.at}\t${e.cwd}\t${e.owner}\t${e.text.replace(/[\t\r\n]+/g, " ")}\n`;
 }
 
-export function decode(line: string): LiveEntry | null {
+function decode(line: string): LiveEntry | null {
   const [at, cwd, by, ...rest] = line.trimEnd().split("\t");
   const seconds = Number(at);
   if (!Number.isFinite(seconds) || cwd === undefined) return null;

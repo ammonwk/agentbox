@@ -23,7 +23,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-export function contentTypeFor(path: string): string {
+function contentTypeFor(path: string): string {
   return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
@@ -60,7 +60,7 @@ function cacheControlFor(root: string, filePath: string): string {
  * decoded the URL — so `%2e%2e%2f` walked straight out. Decode first, resolve
  * to an absolute path, then require a real directory boundary.
  */
-export function safeStaticPath(root: string, urlPath: string): string | null {
+function safeStaticPath(root: string, urlPath: string): string | null {
   let decoded: string;
   try {
     decoded = decodeURIComponent(urlPath);

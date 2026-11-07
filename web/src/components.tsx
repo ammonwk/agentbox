@@ -20,7 +20,7 @@ import { ago, clockNow, subscribeToClock } from "./api";
 import { isMissingChunk, reloadForMissingChunk } from "./lib/update";
 
 import { Icon, type IconComponent } from "./icons";
-export { Icon, type IconComponent, type IconProps } from "./icons";
+export { Icon, type IconComponent } from "./icons";
 
 // ----------------------------------------------------------------- button
 

@@ -12,7 +12,7 @@ export interface ScrollBox {
 }
 
 /** Pixels from the bottom that still count as "at the bottom". */
-export const PIN_SLACK = 48;
+const PIN_SLACK = 48;
 
 export function distanceFromBottom(box: ScrollBox): number {
   return Math.max(0, box.scrollHeight - box.scrollTop - box.clientHeight);
@@ -45,7 +45,7 @@ export function shouldAutoScroll(args: {
 /** Pixels from the top that still count as "at the top" for loading older
  *  history. Generous, so the fetch is underway before the reader hits the
  *  hard ceiling of what is loaded. */
-export const TOP_SLACK = 120;
+const TOP_SLACK = 120;
 
 export function isAtTop(box: ScrollBox, slack: number = TOP_SLACK): boolean {
   return box.scrollTop <= slack;

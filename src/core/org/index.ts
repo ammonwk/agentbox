@@ -13,7 +13,7 @@ import { orgSkillsDir, syncOrgSkills } from "./skills";
 import { storeAccounts, storeReads, storeSessions, type OrgMessage, type OrgSessionRow, type StoreAccount } from "./store";
 
 /** A row unseen this long shows its session away. */
-export const AWAY_MS = 3 * 60_000;
+const AWAY_MS = 3 * 60_000;
 const ACCOUNTS_MS = 60_000;
 const ROWS_MS = 15_000;
 const INBOX_MS = 5_000;

@@ -21,9 +21,9 @@ import type { Repo, RepoSetup } from "./types";
  */
 
 /** The last line of a finished setup log. */
-export const SETUP_DONE = "agentbox: setup exited";
+const SETUP_DONE = "agentbox: setup exited";
 
-export const setupLog = (sessionId: string): string => join(logDir(), "setup", `${sessionId}.log`);
+const setupLog = (sessionId: string): string => join(logDir(), "setup", `${sessionId}.log`);
 
 /** A path to copy, as the repo root sees it: relative, and staying inside. */
 function copyPath(raw: string): string | null {

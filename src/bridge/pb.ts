@@ -93,11 +93,6 @@ export function f64(no: number, v: number): Field {
   new DataView(b.buffer).setFloat64(0, v, true);
   return { no, wire: 1, value: b };
 }
-export function f32(no: number, v: number): Field {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setFloat32(0, v, true);
-  return { no, wire: 5, value: b };
-}
 
 /** The first field numbered `no` as a string, or null. */
 export function strOf(fields: Field[], no: number): string | null {

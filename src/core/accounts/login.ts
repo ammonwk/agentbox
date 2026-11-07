@@ -87,7 +87,7 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
  * then the odd single-character escapes, then carriage returns that are not
  * part of a CRLF.
  */
-export function stripAnsi(s: string): string {
+function stripAnsi(s: string): string {
   return s
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
@@ -131,7 +131,7 @@ export function parseLoginOutput(provider: AccountProvider, text: string): { url
 }
 
 /** Redact every pasted secret, and any ≥ SCRUB_NGRAM-long fragment of one. */
-export function scrubSecrets(text: string, secrets: string[]): string {
+function scrubSecrets(text: string, secrets: string[]): string {
   let out = text;
   for (const s of secrets) {
     if (!s) continue;

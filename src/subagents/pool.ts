@@ -55,7 +55,7 @@ const TOOL_RING = 200;
 
 /** Cap on a returned report. The full text is always in the agent's JSONL, so
  *  this trades nothing but the caller's context. */
-export const MAX_REPORT = 20_000;
+const MAX_REPORT = 20_000;
 
 /**
  * How long an abnormally-ended turn waits before being handed back.
@@ -111,7 +111,7 @@ export interface PoolTiming {
   continueBackoffMs: number[];
 }
 
-export const DEFAULT_TIMING: PoolTiming = {
+const DEFAULT_TIMING: PoolTiming = {
   deathGraceMs: DEATH_GRACE_MS,
   continueBackoffMs: CONTINUE_BACKOFF_MS,
 };
@@ -158,7 +158,7 @@ function processAlive(pid: number): boolean {
  * Not immediate, because a report is so often followed straight away by a
  * question about it, and every resume is seconds of startup the caller pays.
  */
-export const IDLE_PARK_MS = 15 * 60 * 1000;
+const IDLE_PARK_MS = 15 * 60 * 1000;
 
 /**
  * What we say to resume a turn a provider error cut short.
@@ -253,7 +253,7 @@ const HISTORY = 20;
 const MESSAGE_LOG = 50;
 
 /** Where one message stands. `queued` is behind a turn still running. */
-export type TurnStatus = "queued" | "running" | "answered";
+type TurnStatus = "queued" | "running" | "answered";
 
 /** One message and what became of it: the answer to "did my follow-up land". */
 export interface ConversationTurn {
@@ -369,7 +369,7 @@ const acpRunner: RunnerFactory = (id, backend, events, autoApprove) =>
 const READ_ONLY_KINDS = new Set(["read", "search", "fetch", "think"]);
 
 /** Names are addresses — the caller types them back. Keep them typeable. */
-export function normalizeName(raw: string): string {
+function normalizeName(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
@@ -1552,7 +1552,7 @@ export function ago(ms: number): string {
  * process, and a status line that lists those teaches the reader to stop
  * reading it.
  */
-export function renderAgentLine(a: Subagent, now = Date.now()): string | null {
+function renderAgentLine(a: Subagent, now = Date.now()): string | null {
   const where = shortPlace(a.place);
   if (a.state === "running") {
     const snap = a.snapshot(now);

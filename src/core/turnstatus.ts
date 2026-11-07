@@ -18,7 +18,7 @@ export function messageTail(text: string): string {
   return line.length >= TAIL && line.length <= LINE_MAX ? line : `…${t.slice(1 - TAIL)}`;
 }
 
-export type TurnStatusKind = "done" | "waiting" | "needs" | "other";
+type TurnStatusKind = "done" | "waiting" | "needs" | "other";
 
 export interface TurnStatus {
   kind: TurnStatusKind;

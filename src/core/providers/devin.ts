@@ -104,7 +104,7 @@ const keyCache = new Map<string, { mtimeMs: number; key: string | null }>();
  * put in a child's environment or compare in memory; it is never logged or
  * returned anywhere else.
  */
-export function windsurfKeyOf(home: string): string | null {
+function windsurfKeyOf(home: string): string | null {
   const path = join(home, "devin", "credentials.toml");
   let mtimeMs: number;
   try {
@@ -141,7 +141,7 @@ const SUBCOMMANDS = new Set([
 /** Options whose value is the next argument, so it is not mistaken for one. */
 const VALUE_FLAGS = new Set(["--model", "--permission-mode", "--config", "--prompt-file"]);
 
-export function devinSubcommand(argv: string[]): string | null {
+function devinSubcommand(argv: string[]): string | null {
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--") return null;
@@ -162,7 +162,7 @@ export function devinQueuedCount(screen: string): number {
   return m ? Number(m[1]) : 0;
 }
 
-export interface DevinProc {
+interface DevinProc {
   pid: number;
   ppid: number;
   argv: string[];
@@ -170,7 +170,7 @@ export interface DevinProc {
 
 /** session id → pid, for every lock whose pid is a live devin that started
  *  before the lock was written. */
-export function heldLocks(
+function heldLocks(
   locksDir: string,
   pids: Iterable<number>,
   startOf: (pid: number) => number | null,
@@ -215,7 +215,7 @@ export function heldLocks(
  * `acp` server (another client's) only for the sessions it holds; every other
  * subcommand (`list`, `auth`, `mcp`, …) not at all.
  */
-export function devinSessionProcs(procs: DevinProc[], held: Map<string, number>): { pid: number; ids: string[] }[] {
+function devinSessionProcs(procs: DevinProc[], held: Map<string, number>): { pid: number; ids: string[] }[] {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
   const sessionsOf = new Map<number, string[]>();
   for (const [id, pid] of held) sessionsOf.set(pid, [...(sessionsOf.get(pid) ?? []), id]);
@@ -635,7 +635,7 @@ function carried(carry: string[] | undefined, flag: string): string | null {
  *  the command line names the file, not the words in it. */
 const withPrompt = (argv: string[], promptFile?: string) => (promptFile ? [...argv, "--prompt-file", promptFile] : argv);
 
-export interface DevinAdapterOptions {
+interface DevinAdapterOptions {
   /** The default XDG data dir; read on every call so tests can point it at a
    *  fixture. Defaults to `$XDG_DATA_HOME` or ~/.local/share. */
   dataHome?: () => string;

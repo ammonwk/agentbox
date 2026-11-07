@@ -89,7 +89,7 @@ export function readClaudeJson(path: string): { value: Record<string, unknown> |
 }
 
 /** "max" + "default_claude_max_20x" → "max 20x". */
-export function claudePlan(subscriptionType: string | null, rateLimitTier: string | null): string | null {
+function claudePlan(subscriptionType: string | null, rateLimitTier: string | null): string | null {
   if (!subscriptionType) return null;
   const mult = rateLimitTier ? /_(\d+x)$/.exec(rateLimitTier)?.[1] : undefined;
   return mult ? `${subscriptionType} ${mult}` : subscriptionType;
@@ -103,7 +103,7 @@ export function claudePlan(subscriptionType: string | null, rateLimitTier: strin
  * often it is refreshed meanwhile. So `expiresAt` is that end, when you must
  * log in again, and it is said for its last three days.
  */
-export function tokenAuth(
+function tokenAuth(
   t: { expiresAt: number | null; hasRefreshToken: boolean; refreshTokenExpiresAt?: number | null },
   now: number,
 ): AccountAuth {
@@ -120,7 +120,7 @@ export function tokenAuth(
   return { state: "ok", expiresAt: ends, detail: t.expiresAt != null && t.expiresAt <= now ? EXPIRED_REFRESHABLE : null };
 }
 
-export function identifyClaude(account: AccountRef, now = Date.now()): Identity {
+function identifyClaude(account: AccountRef, now = Date.now()): Identity {
   const cred = readClaudeCredentials(account.home);
   const cj = readClaudeJson(claudeJsonPath(account))?.value;
   const oa = rec(cj?.oauthAccount);
@@ -194,7 +194,7 @@ export function readCodexAuth(home: string): CodexAuth | null {
   };
 }
 
-export function identifyCodex(account: AccountRef, now = Date.now()): Identity {
+function identifyCodex(account: AccountRef, now = Date.now()): Identity {
   const a = readCodexAuth(account.home);
   if (!a || a.mode === "none") {
     return { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not logged in" } };
@@ -229,13 +229,13 @@ export function readDevinCredentials(home: string): { apiKey: string | null; api
  *       Tier:              Devin Max
  *       Plan:              Max
  */
-export function parseDevinAuthStatus(text: string): { loggedIn: boolean; email: string | null; plan: string | null } {
+function parseDevinAuthStatus(text: string): { loggedIn: boolean; email: string | null; plan: string | null } {
   const field = (k: string) => new RegExp(`^\\s*${k}:\\s+(.+?)\\s*$`, "m").exec(text)?.[1] ?? null;
   const loggedIn = /^\s*Logged in\b/m.test(text) && !/not logged in/i.test(text);
   return { loggedIn, email: field("Email"), plan: field("Tier") ?? field("Plan") };
 }
 
-export async function identifyDevin(account: AccountRef, execFn: ExecFn = defaultExec): Promise<Identity> {
+async function identifyDevin(account: AccountRef, execFn: ExecFn = defaultExec): Promise<Identity> {
   if (!existsSync(credentialsPath("devin", account.home)!)) {
     return { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not logged in" } };
   }
