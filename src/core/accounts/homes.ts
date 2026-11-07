@@ -138,9 +138,10 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
 }
 
 /**
- * Whether two homes hold the same login. For claude and codex that is the
- * email; for omp it is one OpenCode account in one workspace, because one
- * email can hold several workspaces and each is its own refresh token.
+ * Whether two homes hold the same login. For codex that is the email; for
+ * claude it is the email in one organization, and for omp one OpenCode account
+ * in one workspace: one email can belong to several (a personal plan and a
+ * team), and each is its own refresh token and its own usage pool.
  */
 export function sameLogin(a: Pick<Account, "provider" | "email" | "home">, b: Pick<Account, "provider" | "email" | "home">): boolean {
   const k = loginKey(a);
@@ -153,6 +154,11 @@ function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | nul
   if (a.provider === "omp") {
     const g = readGoLogin(a.home);
     return g?.accountID ? `omp|${g.accountID}|${g.orgID ?? ""}` : null;
+  }
+  if (a.provider === "claude" && a.email) {
+    const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
+    const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
+    return `claude|${a.email.toLowerCase()}|${typeof org === "string" ? org : ""}`;
   }
   return a.email ? `${a.provider}|${a.email.toLowerCase()}` : null;
 }
