@@ -404,7 +404,7 @@ function Actions({
         onClick={() => onAnswer(card)}
         title={card.kind === "merged" ? `Have a session write one page that catches you up on all ${merged} merged PRs (Shift+→)` : "Answer it (Shift+→)"}
       >
-        <span>{card.kind === "decision" ? "Answer" : card.kind === "merged" ? `Catch me up${merged > 1 ? ` (${merged})` : ""}` : "Respond"}</span>
+        <span>{card.kind === "decision" ? "Answer" : card.kind === "merged" ? "Catch me up" : "Respond"}</span>
         <Icon.chevronRight size={18} />
       </button>
     </div>
@@ -801,7 +801,7 @@ function CatchUpSheet({ cards, onClose, onStart }: { cards: Card[]; onClose: () 
         <p>
           A new Claude session reads {n === 1 ? "this merged card" : `all ${n} merged cards`} and the PRs behind them, and writes you one page that teaches what changed in the system. When the page is done it comes back here as a card that opens it.
         </p>
-        <p className="faint">{n === 1 ? "The card is" : `All ${n} are`} marked seen now.</p>
+        <p className="faint">Starting it marks {n === 1 ? "the card" : `all ${n}`} seen.</p>
         <div className="review-answer-foot">
           <span className="faint review-answer-note">{error ? <span className="error">{error}</span> : null}</span>
           <Button type="submit" variant="primary" icon={Icon.send} disabled={busy || !n} autoFocus>
