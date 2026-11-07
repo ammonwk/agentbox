@@ -76,7 +76,9 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
 }
 
 /** The file whose existence means "this home has logged in". For omp, an
- *  OpenCode Go account, its Console sign-in (accounts/gocred.ts). */
+ *  OpenCode Go account, its Console sign-in (accounts/gocred.ts). Claude on
+ *  macOS usually has no such file: its login is in the Keychain, so ask
+ *  `readClaudeCredentials` whether it is logged in. */
 export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
@@ -238,7 +240,7 @@ export async function ensureDefaultAccounts(
   return added;
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return canonical(a) === canonical(b);
 }
 
