@@ -3469,7 +3469,7 @@ export class Fleet extends EventEmitter {
     // the fleet types is told it when it is typed, with the prompt.
     const line = forkId ? "" : prReleaseLine(rec.id);
     const fromFile = adapter.promptDelivery === "file";
-    const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
+    const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch) : undefined;
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
     const withLine = line ? `${line}\n\n${prompt ?? ""}` : prompt;
