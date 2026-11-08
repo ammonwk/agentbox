@@ -54,7 +54,7 @@ export function Calibration({ settings }: { settings: AgentSettings }) {
     <div className="cal">
       <div className="cal-bar">
         <p className="hint">
-          Built from the last {report.days} days of usage readings and placements. Nothing changes until you apply it.
+          Last {report.days} days
         </p>
         <div className="seg" role="group" aria-label="Window">
           {[7, 14, 30].map((d) => (
@@ -71,17 +71,14 @@ export function Calibration({ settings }: { settings: AgentSettings }) {
           label="Placements"
           value={report.placements.toLocaleString()}
           note={`${report.hitAfterPlacement} followed by a rate-limit hit${hitRate != null ? ` (${(hitRate * 100).toFixed(1)}%)` : ""}`}
-          help="How often the account a session was placed on then hit a limit. Lower is better; a rising rate means claims are too small."
+          help="A rising rate means claims are too small."
           tone={hitRate != null && hitRate > 0.1 ? "bad" : hitRate != null && hitRate > 0.04 ? "warn" : undefined}
         />
       </div>
 
       <section className="card cal-card">
         <h3>What sessions actually used</h3>
-        <p className="hint">
-          Weekly points each finished session consumed. The claim should sit near the 75th percentile: high enough that most sessions fit
-          inside it, not so high that one session blocks an account.
-        </p>
+        <p className="hint">Weekly points per finished session. Aim the claim near p75.</p>
         <table className="cal-table">
           <thead>
             <tr>
@@ -181,12 +178,6 @@ function RatesCard({ rates }: { rates: RatesReport }) {
   return (
     <section className="card cal-card">
       <h3>What a percent is worth</h3>
-      <p className="hint">
-        Measured per plan, from how its windows rose together and what agentbox's sessions spent meanwhile. A window's worth in weekly
-        points cannot be thrown off by use agentbox does not see (the browser, another machine): every window counts it. What a week
-        buys can, so it comes from the stretches of work whose points did not come much dearer than usual, and the rest of a rise is
-        counted as used outside agentbox. A change in either puts a note in Review.
-      </p>
       {plans.length === 0 ? <p className="hint">Not enough usage readings yet.</p> : plans.map((p) => <PlanRates key={p.plan} plan={p} />)}
     </section>
   );
@@ -278,7 +269,7 @@ function ValueChart({ plan: p }: { plan: RatesReport["plans"][number] }) {
   const labelEvery = Math.max(1, Math.ceil(days.length / Math.max(1, Math.floor(width / 70))));
   return (
     <div className="cal-value" ref={ref}>
-      <div className="ins-sub-label">What a week bought at API prices, each day over the week before it</div>
+      <div className="ins-sub-label">A week&apos;s worth at API prices, trailing 7 days</div>
       {width > 0 ? (
         <svg
           width={width}
@@ -348,15 +339,13 @@ function ForecastCard({ forecast }: { forecast: ForecastReport }) {
   const shown = forecast.providers.filter((p) => p.pointsPerCost != null);
   return (
     <section className="card cal-card">
-      <h3>What a running session is expected to still use</h3>
+      <h3>Expected remaining use</h3>
       <p className="hint">
-        Weekly points a session goes on to use before it next falls quiet for an hour, averaged over every past stretch of work that
-        stood where it stands: by what it spent in the last ten minutes (rows) and so far this stretch (columns). This is what a
-        session holds against its account once it has spent anything; its model's claim only stands in until then.
-        {forecast.fittedAt ? <> Refitted daily, last {new Date(forecast.fittedAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.</> : null}
+        Rows: spent in the last 10 minutes. Columns: spent so far.
+        {forecast.fittedAt ? <> Fitted {new Date(forecast.fittedAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.</> : null}
       </p>
       {shown.length === 0 ? (
-        <p className="hint">Not enough history yet: sessions hold what is left of their claims until there is.</p>
+        <p className="hint">Not enough history yet.</p>
       ) : (
         shown.map((p) => {
           const rows = bucketNames(forecast.recentEdges, p.pointsPerCost!, "nothing");

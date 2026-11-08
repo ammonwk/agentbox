@@ -216,10 +216,10 @@ export function AccountPicker({
                     {a.id === placement?.accountId ? <span className="ns-tag">auto&apos;s pick</span> : null}
                   </div>
                   {c && !c.eligible ? <p className="ns-acct-reason">{c.reason ?? "not eligible"}</p> : null}
-                  {!a.enabled ? <p className="ns-acct-reason">Off for auto-placement; a pin still runs there.</p> : null}
+                  {!a.enabled ? <p className="ns-acct-reason">Off for auto-placement</p> : null}
                 </div>
                 {c?.eligible && c.legRoom != null ? (
-                  <span className="ns-acct-room" title="5-hour room left at its reset, by the pace it is filling and the claims too new to show in it — what the balancer ranks by">
+                  <span className="ns-acct-room" title="5-hour room left at reset">
                     {fmtPts(c.legRoom)}
                     <small>room</small>
                   </span>

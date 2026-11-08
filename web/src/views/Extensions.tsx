@@ -227,12 +227,11 @@ function About({ x, mine }: { x: ExtensionInfo; mine: Loaded | null }) {
       {x.description ? <p>{x.description}</p> : null}
       <p className="ext-desc">
         {x.builtIn ? "Comes with agentbox" : x.dir}
-        {x.client ? " · its part in the app is its client, loaded into this page" : ""}
       </p>
       {!x.enabled ? (
-        <p>It is off: turn it on to put it back in the app.</p>
+        <p>Off.</p>
       ) : SAFE ? (
-        <p>This page was opened with <code>?safe=1</code>, so no extension's part in the app is loaded.</p>
+        <p>Not loaded in safe mode.</p>
       ) : mine?.state === "failed" ? (
         <p className="bad">Its part in the app did not load: {mine.error}</p>
       ) : adds.length ? (

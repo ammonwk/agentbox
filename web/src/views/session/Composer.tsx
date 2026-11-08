@@ -239,7 +239,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const talks = voiceNotes();
   const recording = voice.phase !== "idle";
 
-  const placeholder = session.status === "running" ? `Message ${provider} — it arrives when the current step yields` : `Message ${provider}`;
+  const placeholder = `Message ${provider}`;
   const lastOn = accounts.find((a) => a.id === session.accountId)?.label ?? null;
 
   return (
@@ -334,7 +334,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
-          title="Enter sends · Shift+Enter for a new line · ↑ for what you said before · / for skills · Esc stops a running turn, and puts back a message it had not answered yet"
+          title="Enter to send · Shift+Enter for a new line"
           {...skill.props}
           onChange={(e) => {
             setText(e.target.value);
@@ -362,7 +362,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
             <button
               type="button"
               className="cmp-tool cmp-esc"
-              title="Press Escape in the session — cancels the current prompt or menu"
+              title="Esc"
               aria-label="Press Escape in the session"
               disabled={busy}
               onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
@@ -428,11 +428,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       {/* Enter / Shift+Enter is what every chat box does; it lives in the
           textarea's tooltip rather than a permanent line under it. */}
       {btw ? (
-        <div className="cmp-hint">A side question: Claude answers from what it already knows, without tools and without stopping its work. The answer shows in the Timeline.</div>
+        <div className="cmp-hint">Side question · answered without tools</div>
       ) : session.cold && mode.kind === "send" ? (
         <div className="cmp-hint">
-          Idle since {ago(session.lastActivityAt)}, so its cache is cold: a message wakes it on whichever account has
-          room{lastOn ? ` (last on ${lastOn})` : ""}.
+          Idle since {ago(session.lastActivityAt)}{lastOn ? ` · last on ${lastOn}` : ""}
         </div>
       ) : null}
     </div>
@@ -514,13 +513,9 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
           {short.charAt(0).toUpperCase() + short.slice(1)} · {ago(hit.at)}
         </strong>
         <span className="cmp-limit-detail">{hit.detail}</span>
-        {hit.hopped ? (
-          <span className="cmp-limit-auto">agentbox already moved it off one account at its limit, and does that once: from here a move is yours.</span>
-        ) : null}
         {session.autoResume ? (
           <span className="cmp-limit-auto">
-            agentbox tells it to carry on here {fmtRetryAt(session.autoResume.at, now)}, a minute after the window resets — or send it
-            something yourself.
+            Resumes here {fmtRetryAt(session.autoResume.at, now)}
           </span>
         ) : null}
         {error ? (
@@ -533,18 +528,12 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
         ) : (
           <span className="cmp-limit-why">
             {moves
-              ? `${choice !== "auto" ? "" : placement?.mode === "overflow" ? `${target!.label} is the least claimed. ` : `${target!.label} has the most room. `}Moving re-sends ${resend} without the cache; the agent is told “${CONTINUE}”.`
-              : choice !== "auto"
-                ? `Stays here; the agent is told “${CONTINUE}”.`
-                : !placement && !placeErr
-                  ? "Asking the balancer where there is room…"
-                  : !canMove
-                    ? movable
-                      ? `No other account has room either, so this just tells it “${CONTINUE}”.`
-                      : `It can only continue here, so this just tells it “${CONTINUE}”.`
-                    : placement
-                      ? `The balancer would keep it here, so this just tells it “${CONTINUE}”.`
-                      : `Could not ask the balancer (${placeErr}); pick an account below, or continue here.`}
+              ? `Re-sends ${resend} uncached`
+              : placeErr
+                ? `Could not reach the balancer: ${placeErr}`
+                : !placement && choice === "auto"
+                  ? "Finding an account…"
+                  : null}
           </span>
         )}
       </div>

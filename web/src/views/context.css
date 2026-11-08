@@ -13,14 +13,6 @@
   padding-bottom: 48px;
 }
 
-.cx-lede {
-  margin: 0;
-  max-width: 66ch;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.55;
-}
-
 /* ------------------------------------------------------------- the scope */
 
 .cx-scopes {

@@ -168,11 +168,7 @@ function Overview({ data }: { data: McpState }) {
   return (
     <div className="sk-body mc-overview">
       <h2>MCP servers for every agent</h2>
-      <p>
-        A global server is given to every session agentbox starts or resumes, on every account. Each agent keeps its own settings; when it already
-        has a server of the same name, it keeps that one.
-      </p>
-      <p className="faint">This shows the defaults for new sessions. Project, profile and explicit settings can keep their own definitions. Sessions started outside agentbox get the global list when adopted. A configured server still needs to connect successfully inside the agent.</p>
+      <p>Global servers are given to every session. An agent&apos;s own server of the same name wins.</p>
       <table className="mc-agents">
           <tbody>
             {data.agents.map((a) => (
@@ -313,8 +309,7 @@ function ServerDetail({
           <div className="mc-stale" role="status">
             <h3 className="mc-sub">Running sessions</h3>
             <p>
-              {data.stale.length} running session{data.stale.length === 1 ? "" : "s"} started before the last change to this list. They get it when
-              they next start or resume; agentbox does not restart them.
+              {data.stale.length} running session{data.stale.length === 1 ? "" : "s"} started before this change and get{data.stale.length === 1 ? "s" : ""} it on resume.
             </p>
             <ul>
               {data.stale.slice(0, 8).map((s) => (
@@ -324,9 +319,7 @@ function ServerDetail({
               ))}
             </ul>
           </div>
-        ) : (
-          <p className="faint mc-saved">No running session is known to predate the last change. The launch snapshots below show what was passed; connection health is reported inside each agent.</p>
-        )}
+        ) : null}
 
         {!!data.sessions?.length && <>
           <h3 className="mc-sub">Running sessions</h3>
@@ -352,9 +345,7 @@ function ServerDetail({
               It did not answer: {check.error}
             </p>
           )
-        ) : (
-          <p className="faint">Starts the server here, asks for its tools, and stops it.</p>
-        )}
+        ) : null}
       </div>
 
       <div className="sk-foot">
@@ -437,7 +428,6 @@ function ServerForm({
     >
       <div className="sk-header">
         <Header title={saved ? `Edit ${saved.name}` : "Add a global server"} onBack={onBack} />
-        <p className="faint mc-form-lead">Every session agentbox starts or resumes gets it. Running sessions keep what they started with.</p>
         {error ? (
           <p className="sk-note mc-error" role="alert">
             {error}
@@ -448,7 +438,7 @@ function ServerForm({
         <label className="mc-field">
           <span>Name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="github" autoComplete="off" spellCheck={false} required />
-          <small className="faint">Letters, digits, - and _. Agents show its tools under this name.</small>
+          <small className="faint">Letters, digits, - and _</small>
         </label>
 
         <fieldset className="mc-field">
@@ -473,7 +463,6 @@ function ServerForm({
             <label className="mc-field">
               <span>Command</span>
               <input className="mono" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" autoComplete="off" spellCheck={false} />
-              <small className="faint">Started directly, not through a shell.</small>
             </label>
             <label className="mc-field">
               <span>Arguments</span>
@@ -534,7 +523,7 @@ function Pairs({ title, what, pairs, onChange }: { title: string; what: string; 
       <Button size="sm" icon={Icon.plus} onClick={() => onChange([...pairs, { key: "", value: "", kept: false }])}>
         Add a {what}
       </Button>
-      <small className="faint">Values are kept private and are never shown again.</small>
+      <small className="faint">Values are hidden after saving.</small>
     </fieldset>
   );
 }

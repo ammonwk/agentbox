@@ -84,7 +84,6 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 
 /** Pages a project filters (and extensions' pages that say `scoped`); the rest are the machine's, whatever is selected. */
 const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions"]);
-const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "extensions", "context", "mcps", "voice"]);
 
 const PAGE_TITLE: Record<string, string> = {
   sessions: "Sessions",
@@ -297,7 +296,6 @@ export function App() {
             state={state}
             selected={scope.project}
             onOpen={() => setSwitcherOpen(true)}
-            hint={GLOBAL_PAGES.has(route.page) ? (route.page === "context" ? "What agents are told" : "Global settings and tools") : undefined}
           />
         ) : null}
         {/* The sessions pages carry their own header — the board's filter bar,
@@ -347,7 +345,6 @@ export function App() {
               <Bootstrapping />
             ) : staleProject && scopedPage ? (
               <Empty title="This project is no longer registered" action={<Button onClick={() => selectScope("project", null)}>All projects</Button>}>
-                <p>Your conversations and work remain in All projects.</p>
               </Empty>
             ) : wrongSession ? (
               <Empty
@@ -620,16 +617,12 @@ function Bootstrapping() {
   if (connected && starting) {
     return (
       <Empty title="agentbox is starting…">
-        <p>
-          Reading transcripts{starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}. Your sessions appear when it is done.
-        </p>
+        <p>Reading transcripts{starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}…</p>
       </Empty>
     );
   }
   return (
-    <Empty title={connected ? "Loading your sessions…" : "Connecting to agentbox…"}>
-      <p>This should take a moment. If it does not, the server is probably not running.</p>
-    </Empty>
+    <Empty title={connected ? "Loading your sessions…" : "Connecting to agentbox…"} />
   );
 }
 

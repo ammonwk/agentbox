@@ -66,13 +66,8 @@ function Schedules({ state }: { state: AppState }) {
   return (
     <section className="card" id="schedules" data-nav-item data-nav-id="settings:scheduled-sessions" tabIndex={0} aria-label="Scheduled sessions">
       <h3>Scheduled sessions</h3>
-      <p className="hint">
-        Sessions that start on their own, each time a new one. Add one from New session: open the ▾ beside Start, pick{" "}
-        <strong>Schedule…</strong>, and say something like “every weekday at 9am”, “every 2 hours” or “whenever CD on staging is red”. One-time ones wait in the
-        session list instead.
-      </p>
       {recurring.length === 0 ? (
-        <Empty title="Nothing recurring yet">Schedule one from New session and it is listed here, to pause, change or delete.</Empty>
+        <Empty title="Nothing recurring yet">Use Schedule… beside Start in New session.</Empty>
       ) : (
         <ul className="sched-list">
           {recurring.map((sc) => (
@@ -213,7 +208,7 @@ function General({ settings, save, saveStateOf }: SectionProps) {
     <section className="card" data-nav-item data-nav-id="settings:general" tabIndex={0} aria-label="General">
       <h3>General</h3>
 
-      <Field label="Theme" hint="Light, Dark, or what your system uses.">
+      <Field label="Theme">
         {(id) => (
           <div className="seg" role="group" aria-label="Theme" id={id}>
             {([["light", "Light"], ["system", "System"], ["dark", "Dark"]] as const).map(([value, label]) => (
@@ -226,20 +221,7 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("theme")} />
 
-      <Field label="Theme" hint="Also on the switch at the bottom of the sidebar.">
-        {(id) => (
-          <div className="seg" role="group" aria-label="Theme" id={id}>
-            {(["light", "system", "dark"] as const).map((t) => (
-              <button key={t} type="button" aria-pressed={settings.theme === t} onClick={() => save("theme", { theme: t })}>
-                {t[0].toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
-        )}
-      </Field>
-      <SaveMark state={saveStateOf("theme")} />
-
-      <Field label="Repo in the session list" hint="Each session's repo or folder, as its name before the title or as the repo's shape, which takes less room. A shape's name is on its tooltip.">
+      <Field label="Repo in the session list">
         {(id) => (
           <div className="seg" role="group" aria-label="Repo in the session list" id={id}>
             {(["name", "shape"] as const).map((m) => (
@@ -254,13 +236,12 @@ function General({ settings, save, saveStateOf }: SectionProps) {
 
       <ToggleRow
         label="Split Active and Inactive"
-        hint="Two tabs in the session list: sessions that did something in the last 3 hours, are running, need you or are pinned, and the rest. Off, they are one list in the sort's order, with closed sessions at the end."
         checked={settings.splitActive}
         onChange={(v) => save("splitActive", { splitActive: v })}
       />
       <SaveMark state={saveStateOf("splitActive")} />
 
-      <Field label="Hide working steps" hint="The thinking and tool calls between the things an agent says, folded to one line you can open. When done shows them while the agent works, and folds them once its turn is over.">
+      <Field label="Hide working steps">
         {(id) => (
           <div className="seg" role="group" aria-label="Hide working steps" id={id}>
             {([["always", "Yes"], ["done", "When done"], ["never", "Never"]] as const).map(([v, label]) => (
@@ -273,11 +254,11 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("hideSteps")} />
 
-      <Field label="Accent colour" hint="Buttons, links and the open tab. This browser keeps it; other devices keep their own.">
+      <Field label="Accent colour" hint="Saved per browser">
         {(id) => <AccentPicker id={id} />}
       </Field>
 
-      <Field label="Board history" hint="How many days a session with no activity stays on the board before it drops off. Open sessions agentbox started are kept regardless; closed ones stay findable under See closed while they are inside this window.">
+      <Field label="Board history" hint="Idle sessions drop off the list after this">
         {(id) => (
           <div className="input-row">
             <CommitInput
@@ -296,15 +277,13 @@ function General({ settings, save, saveStateOf }: SectionProps) {
 
       <ToggleRow
         label="Auto-approve tool calls"
-        hint="Starts new sessions with each provider's own bypass flag (--dangerously-skip-permissions, --full-auto, …), so they never park on a permission prompt."
         checked={settings.autoApprove}
         onChange={(v) => save("autoApprove", { autoApprove: v })}
       />
       <SaveMark state={saveStateOf("autoApprove")} />
       {settings.autoApprove && (
         <p className="warn">
-          <Icon.alert size={15} /> Nothing gates what a new session does: it edits files and runs commands with no confirmation from
-          anyone. Sessions already running keep the mode they started in.
+          <Icon.alert size={15} /> New sessions edit files and run commands without asking.
         </p>
       )}
     </section>
@@ -352,9 +331,6 @@ function Models({
   return (
     <section className="card" data-nav-item data-nav-id="settings:default-models" tabIndex={0} aria-label="Default models">
       <h3>Default models</h3>
-      <p className="hint">
-        What a new session runs on when the dialog&apos;s Model box is left empty. Empty here means the provider&apos;s own default.
-      </p>
       <div className="models-grid">
         {PROVIDERS.map((p) => {
           const info = installed.find((x) => x.id === p);
@@ -376,7 +352,7 @@ function Models({
           );
         })}
       </div>
-      <Field label="Retired" hint="old=new, comma-separated: a session started, resumed or moved on the old model runs on the new one">
+      <Field label="Retired" hint="old=new, comma-separated">
         {(id) => (
           <>
             <CommitInput
@@ -403,8 +379,8 @@ function Models({
 // ----------------------------------------------------------- notifications
 
 const PUSH_WORDS: Record<PushState, string> = {
-  unsupported: "This browser cannot receive them. On an iPhone or iPad, add agentbox to the Home Screen (Share → Add to Home Screen) and turn them on from the app there.",
-  denied: "Notifications are turned off for agentbox in this device's settings; allow them there, then come back.",
+  unsupported: "Not supported in this browser. On iPhone or iPad, add agentbox to the Home Screen first.",
+  denied: "Blocked in this device's settings.",
   off: "Off on this device.",
   on: "On for this device.",
 };
@@ -445,10 +421,7 @@ function Notifications() {
   return (
     <section className="card" data-nav-item data-nav-id="settings:notifications" tabIndex={0} aria-label="Notifications">
       <h3>Notifications</h3>
-      <p className="hint">
-        A notification on this device when a session is blocked on you: a permission prompt, a question, an error it cannot get past. Each device is turned
-        on by itself, and it arrives with the app closed.
-      </p>
+      <p className="hint">When a session needs you.</p>
       {state && (
         <p className="hint" role="status">
           {PUSH_WORDS[state]}
@@ -489,9 +462,7 @@ function Balancer({ settings, save, saveStateOf }: SectionProps) {
     <section className="card" data-nav-item data-nav-id="settings:balancer" tabIndex={0} aria-label="Balancer">
       <h3>Balancer</h3>
       <p className="hint">
-        How new sessions are placed across accounts. Everything is in weekly percentage points. The{" "}
-        <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> page suggests values from what your sessions actually
-        used.
+        <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> suggests values from past usage.
       </p>
       <div className="balancer-grid">
         {BALANCER_KEYS.map((k) => (
@@ -571,13 +542,6 @@ function Repositories({
   return (
     <section className="card" data-nav-item data-nav-id="settings:repositories" tabIndex={0} aria-label="Repositories">
       <h3>Repositories</h3>
-      <p className="hint">
-        What sessions can be spawned against. Give a local absolute path, or an{" "}
-        <code>owner/repo</code> slug to clone. Registering also resolves the
-        branch new worktrees are cut from and the GitHub slug used to find pull
-        requests, so adding a remote repo is not instant — it clones first.
-      </p>
-
       <div className="repo-add">
         <label className="sr-only" htmlFor="repo-ref">
           Repository path or owner/repo slug
@@ -639,7 +603,7 @@ function Repositories({
               ) : (
                 <span
                   className="faint"
-                  title="No GitHub slug was resolved for this repo, so its pull requests cannot be found or matched to sessions."
+                  title="Pull requests can't be matched without one"
                 >
                   no GitHub remote
                 </span>
@@ -717,7 +681,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
     <details className="repo-setup">
       <summary>{summary}</summary>
 
-      <Field label="New sessions start in" hint="What New session picks when this repo is chosen. Last used keeps whatever the previous session did.">
+      <Field label="New sessions start in">
         {(id) => (
           <div className="seg" role="group" aria-label="New sessions start in" id={id}>
             {START_IN.map(([v, label]) => (
@@ -739,7 +703,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
 
       <Field
         label="Copy into new worktrees"
-        hint="Paths from the repo root, one per line, copied from its checkout before the agent starts: what git does not carry, like .env files. One the branch already has is left alone."
+        hint="One path per line, from the repo root"
       >
         {(id) => (
           <CommitInput
@@ -757,7 +721,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
 
       <Field
         label="Setup command"
-        hint="Runs in each new worktree as the agent starts. Its output is in the agentbox logs, under setup/<session>.log."
+        hint="Output in logs/setup/<session>.log"
       >
         {(id) => (
           <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />
@@ -834,21 +798,13 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
   return (
     <section className="card" data-nav-item data-nav-id="settings:disk" tabIndex={0} aria-label="Disk">
       <h3>Disk</h3>
-      <p className="hint">
-        Every session keeps its worktree when it stops or is closed, because the checkout
-        is what Resume comes back to. They add up — a worktree of a large repo is
-        a gigabyte — so this is where you get the space back. Removing a worktree
-        never touches its branch, and a detached checkout goes only when every commit
-        in it is on a branch or remote. A session whose worktree is gone needs its
-        branch checked out again (<code>git worktree add</code>) before it can resume.
-      </p>
+      <p className="hint">Removing a worktree keeps its branch. A session without one can't resume until it is checked out again.</p>
 
       <ToggleRow
         label="Delete safe worktrees every night at 3am"
         hint={
-          "The same ones Delete safe removes — including anything untouched for 7 days, uncommitted work and all — except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
           (nightly
-            ? ` Last run ${new Date(nightly.startedAt).toLocaleDateString()}: removed ${nightly.removed}, freeing ${fmtBytes(nightly.bytesFreed)}` +
+            ? `Last run ${new Date(nightly.startedAt).toLocaleDateString()}: removed ${nightly.removed}, freeing ${fmtBytes(nightly.bytesFreed)}` +
               (nightly.failed.length ? `; ${nightly.failed.length} could not be removed` : "") +
               (nightly.cutShort ? "; stopped at its four-hour limit with more to go" : "") +
               "."
@@ -882,9 +838,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
 
       {busy === "scan" && (
         <p className="hint" role="status">
-          Scanning — reading every worktree of every registered repo, checking
-          each for changes, asking GitHub what became of each branch, and sizing
-          it all on disk. Tens of seconds is normal.
+          Scanning…
         </p>
       )}
 
@@ -896,11 +850,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
 
       {scan && scan.ghUnavailable && (
         <p className="warn">
-          <Icon.alert size={15} /> The pull requests of a repo here are not loaded
-          from GitHub yet (see the warnings if <code>gh</code> is the reason), so no
-          branch could be checked for a merged or closed pull request. Branch
-          worktrees are kept; only detached checkouts whose commits are elsewhere,
-          or anything untouched for 7 days, count as safe below.
+          <Icon.alert size={15} /> GitHub couldn&apos;t be reached, so merged branches aren&apos;t counted as safe.
         </p>
       )}
 
@@ -920,8 +870,8 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
                 disabled={busy !== null || safe.length === 0}
                 title={
                   safe.length === 0
-                    ? "Nothing is safe to delete — every worktree below has changes, an open PR, or could not be checked."
-                    : "Removes worktrees nobody is coming back to: merged or closed PRs; clean branches GitHub holds no PR for; detached checkouts whose commits are all on a branch or remote; the same with only untracked files once 3 days idle; and anything untouched for 7 days, whatever is in it. Nothing is saved first."
+                    ? "Every worktree has changes or an open PR"
+                    : "Merged, closed or pushed work, and anything untouched for 7 days"
                 }
                 onClick={() => void reclaim("safe", safe.map((w) => w.path), false)}
               >
@@ -985,13 +935,8 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
           title={`Delete all ${removable.length} worktrees?`}
           body={
             <>
-              This removes {fmtBytes(allBytes)} across {removable.length} worktree
-              {removable.length === 1 ? "" : "s"}, including{" "}
-              {removable.length - safe.length} that {removable.length - safe.length === 1 ? "is" : "are"}{" "}
-              <strong>not</strong> safe — uncommitted changes and commits that were
-              never pushed are gone for good. Branches are kept, so anything
-              committed and on a branch survives. The repo's own checkout and any
-              worktree a running session is using are skipped.
+              {removable.length - safe.length} of them {removable.length - safe.length === 1 ? "has" : "have"} uncommitted or unpushed
+              work that will be lost. Branches are kept.
             </>
           }
           danger
@@ -1036,11 +981,6 @@ function Diagnostics({ warnings, providers }: { warnings: string[]; providers: A
   return (
     <section className="card" data-nav-item data-nav-id="settings:diagnostics" tabIndex={0} aria-label="Diagnostics">
       <h3>Diagnostics</h3>
-      <p className="hint">
-        The programs agentbox drives. Each is actually run, not just looked up, so one that is installed but unusable — <code>gh</code>{" "}
-        logged out, most often — shows here instead of passing.
-      </p>
-
       <div className="diag-head">
         <Button variant="ghost" icon={Icon.refresh} loading={loading} onClick={() => load(true)}>
           Re-check

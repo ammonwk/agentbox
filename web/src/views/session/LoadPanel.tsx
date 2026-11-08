@@ -141,14 +141,14 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
             <th>process</th>
             <th>role</th>
             <th className="num" title="How long it has been running">age</th>
-            <th className="num" title="CPU time it has used itself since it started. Much less than its age: it has mostly been waiting.">
+            <th className="num" title="CPU time since it started">
               cpu time
             </th>
-            <th title="The last five minutes, newest on the right. Top: CPU. Bottom: bytes read from sockets, pipes and files.">
+            <th title="Last 5 minutes. Top: CPU. Bottom: reads.">
               last 5 min
             </th>
             <th className="num">cpu</th>
-            <th className="num" title="How long since it last used CPU or read anything">
+            <th className="num" title="Since last CPU or read">
               quiet
             </th>
             <th className="num">memory</th>
@@ -204,14 +204,6 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
         </tbody>
       </table>
 
-      <p className="hint">
-        Memory is proportional set size — shared pages are split between the processes holding them,
-        so these add up to the subtree total instead of double counting. CPU is measured per process
-        over the last interval; the summary above also counts short-lived commands that started and
-        finished inside it, so it can legitimately exceed the sum of the rows. A process that has
-        been quiet for minutes, with little CPU time for its age, is waiting on something: the network,
-        a lock, or input that is not coming.
-      </p>
     </div>
   );
 }

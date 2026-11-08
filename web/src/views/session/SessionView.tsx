@@ -414,7 +414,7 @@ function ConfirmClose({ session, onCancel, onConfirm }: { session: SessionRow; o
     <Confirm
       title={`Close “${titleOf(session)}”?`}
       confirmLabel="Close"
-      body={<p>It is mid-turn. Closing stops it now, so this turn is cut short. The conversation is kept, and See closed finds it to reopen or resume.</p>}
+      body={<p>It is mid-turn and will stop now.</p>}
       onCancel={onCancel}
       onConfirm={onConfirm}
     />
@@ -813,7 +813,7 @@ function Detail({
                 variant="ghost"
                 icon={Icon.undo}
                 disabled={busy}
-                title="Put it back on the list. A message picks it up where it left off."
+                title="Put it back on the list"
                 onClick={() => {
                   forget(session.id);
                   void run(() => api.close(session.id, false));
@@ -827,7 +827,7 @@ function Detail({
                 variant="ghost"
                 icon={Icon.x}
                 disabled={busy}
-                title="Stop it and take it off the list. The transcript and worktree stay; See closed finds it, and it can be resumed."
+                title="Stop it and take it off the list"
                 onClick={() => (session.status === "running" && subagents.length === 0 ? setConfirmClose(true) : void close())}
               >
                 Close

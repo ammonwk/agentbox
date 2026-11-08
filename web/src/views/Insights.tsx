@@ -71,10 +71,6 @@ export function Insights({ state, accountId }: { state: AppState; accountId: str
           <Spinner size={16} />
           <div>
             <strong>Reading this account's transcripts…</strong>
-            <p className="hint">
-              The first look reads the whole week — a gigabyte or more for a busy Claude account, a few seconds per gigabyte. After that only what was
-              added since is read.
-            </p>
           </div>
         </div>
       ) : (
@@ -104,13 +100,13 @@ function Report({ data, titleOf }: { data: UsageInsights; titleOf: TitleOf }) {
       <div className="ins-cols">
         <Section
           title="Where it went"
-          hint="API-equivalent dollars: what these tokens would cost at list prices. The plan does not bill them, but it is the one scale on which a cache read, a cache write and an output token add up."
+          hint="At API list prices"
         >
           <Composition spend={data.total} provider={data.provider} />
         </Section>
         <Section
           title="Over time"
-          hint={`Spend per hour${data.weekly ? ", and the weekly bar over the same hours" : ""}. Tap or hover for the hour.`}
+          hint={`Spend per hour${data.weekly ? " and the weekly bar" : ""}`}
         >
           <Timeline data={data} />
         </Section>
@@ -126,13 +122,11 @@ function Report({ data, titleOf }: { data: UsageInsights; titleOf: TitleOf }) {
         {data.source === "transcripts" ? (
           <>
             Read from {data.scan.files.toLocaleString()} transcripts
-            {data.scan.bytes ? ` (${fmtBytes(data.scan.bytes)} new)` : ""} in {fmtDur(data.scan.ms)}. Calls a session made before it was moved here
-            from another account are left out; a session moved away takes its calls with it.
+            {data.scan.bytes ? ` (${fmtBytes(data.scan.bytes)} new)` : ""} in {fmtDur(data.scan.ms)}.
           </>
         ) : (
           <>
-            {data.provider} keeps no per-call usage agentbox can read, so this is built from the token totals agentbox sampled as each session moved:
-            no cache, context or wait detail.
+            Built from sampled token totals; {data.provider} has no per-call usage.
           </>
         )}
       </p>
@@ -772,7 +766,7 @@ function Sessions({ data, titleOf, total }: { data: UsageInsights; titleOf: Titl
   return (
     <Section
       title="Sessions"
-      hint={`The costliest of ${data.sessionCount}, each with its subagents and teammates. Open one for who spent it.`}
+      hint={`Top of ${data.sessionCount}, with their subagents`}
     >
       {hasAgents ? (
         <div className="ins-chart-legend" aria-hidden="true">
@@ -929,7 +923,7 @@ function Rebuilds({
   return (
     <Section
       title="Cache rebuilds"
-      hint={`Calls that wrote a whole context again because its cache had expired while it waited: ${money(rb.cost)} (${share(rb.cost, total)}), where reading it warm would have cost ${money(rb.warmCost)}. A session's cache lasts an hour; a subagent's five minutes.`}
+      hint={`${money(rb.cost)} (${share(rb.cost, total)}) re-writing expired caches; ${money(rb.warmCost)} if warm`}
     >
       <div className="ins-causes">
         {rb.causes.map((c) => (
@@ -997,7 +991,7 @@ function Context({ data, total }: { data: UsageInsights; total: number }) {
   return (
     <Section
       title="Context size"
-      hint="Calls by how much context each carried. A call's price grows with everything it re-reads, so the same tool call costs several times more late in a long session."
+      hint="Calls by context carried"
     >
       <table className="ins-table">
         <thead>

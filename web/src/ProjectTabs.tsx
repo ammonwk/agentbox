@@ -65,7 +65,7 @@ function attentionOf(state: AppState, project: string | null): string {
     .join("; ");
 }
 
-export function ProjectTabs({ state, selected, onOpen, hint }: { state: AppState; selected: string | null; onOpen: () => void; hint?: string }) {
+export function ProjectTabs({ state, selected, onOpen }: { state: AppState; selected: string | null; onOpen: () => void }) {
   const { tabs, close } = useProjectTabs(state, selected);
   return (
     <nav className="project-bar" aria-label="Projects">
@@ -92,7 +92,6 @@ export function ProjectTabs({ state, selected, onOpen, hint }: { state: AppState
       <button type="button" className="project-tab-add" onClick={onOpen} aria-label="Open a project" title="Open a project" aria-haspopup="dialog">
         <Icon.plus size={14} />
       </button>
-      {hint ? <span className="hint">{hint}</span> : null}
     </nav>
   );
 }

@@ -288,7 +288,6 @@ function Body({ file, session, source, wrap, lines, here }: {
         <div className="fv-empty">
           <Icon.folder size={32} weight="duotone" />
           <p className="fv-empty-title">A folder</p>
-          <p className="fv-empty-detail">Folders open in the file explorer on the computer agentbox runs on.</p>
         </div>
       );
     default:

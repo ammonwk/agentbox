@@ -143,7 +143,6 @@ function AccountList({ state }: { state: AppState }) {
               <span className="acs-sec-actions">
                 {p === "omp" ? (
                   <>
-                    <span className="hint">One OpenCode sign-in per account; omp and opencode sessions share them.</span>
                     <Button size="sm" icon={Icon.plus} disabled={!info?.installed} onClick={() => setAdding({ provider: p })}>
                       Add account
                     </Button>
@@ -167,8 +166,7 @@ function AccountList({ state }: { state: AppState }) {
 
             {accounts.length === 0 ? (
               <div className="acs-empty">
-                No {PROVIDER_LABEL[p]} account yet. <strong>Add account</strong> logs a new one in from here; <strong>Import</strong> uses a
-                credential home you already have.
+                No {PROVIDER_LABEL[p]} accounts yet.
               </div>
             ) : (
               <div className="acs-grid">
@@ -316,7 +314,7 @@ function AccountCard({
           </h3>
         )}
         {a.isDefault ? (
-          <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
+          <span className="src ac-default" title={`Your ${a.provider} CLI's own login`}>
             CLI login
           </span>
         ) : null}
@@ -368,15 +366,9 @@ function AccountCard({
       {a.isDefault && a.email ? (
         <div className="ac-cli-only">
           <p className="ac-cli-only-head">
-            <Icon.alert size={12} /> agentbox is borrowing your CLI's login
+            <Icon.alert size={12} /> Shares your CLI&apos;s login
           </p>
-          <p>
-            {a.email} is only logged in here, in your <code>{a.provider}</code> CLI. Log the CLI into another account and agentbox loses
-            this one.
-          </p>
-          <p>
-            To keep it, sign your browser into <strong>{a.email}</strong>, then:
-          </p>
+          <p>Switching the CLI to another account signs this one out.</p>
           <Button size="sm" icon={Icon.plus} onClick={onAddOwn}>
             Give agentbox its own login
           </Button>
@@ -389,7 +381,7 @@ function AccountCard({
             {a.auth.state === "missing"
               ? "No usage until it is logged in."
               : a.usage.source === "none"
-                ? "This provider publishes no usage windows we can read."
+                ? "No usage data from this provider."
                 : "No usage reading yet."}
           </p>
         ) : (
@@ -453,7 +445,7 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement. The 10% of the sessions listed expected to use the most (the 90th percentile, rounded up) are underlined">Used</th>
+                <th className="num" title="Weekly points used, of what it is expected to use. The top 10% are underlined.">Used</th>
               </tr>
             </thead>
             <tbody>
@@ -465,7 +457,7 @@ function AccountCard({
                   <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined} data-top={top.has(cl.sessionId) || undefined}>
                     <td>
                       {cl.machine ? (
-                        <span className="ac-claim-title" title={`On ${cl.machine}: an org session on another machine, which this board cannot open`}>
+                        <span className="ac-claim-title" title={`On ${cl.machine}`}>
                           {cl.title}
                           <span className="faint"> · {cl.machine}</span>
                         </span>
@@ -474,7 +466,7 @@ function AccountCard({
                           {cl.title}
                         </a>
                       )}
-                      {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}
+                      {cl.lapsed ? <span className="ac-lapsed" title="Idle; its claim no longer counts">lapsed</span> : null}
                     </td>
                     <td
                       className="num"
@@ -504,13 +496,13 @@ function AccountCard({
               Balancer: <strong>eligible</strong>
               {c.legRoom != null ? <> · 5-hour room {fmtPts(c.legRoom)}</> : null}
               {c.shortLoadTo != null ? (
-                <span title="New sessions go to the account whose weekly resets soonest until its 5-hour window is forecast this full, then to the next to reset">
+                <span title="Filled to this before the next account is used">
                   {" "}
                   · loads to {fmtPts(c.shortLoadTo)}%
                 </span>
               ) : null}
               {c.shortPace != null ? (
-                <span title="How fast its 5-hour window has been filling over the last 45 minutes, in that window's percent an hour">
+                <span title="5-hour window fill rate, last 45 minutes">
                   {" "}
                   · filling {fmtPts(c.shortPace)}%/h
                 </span>
@@ -563,7 +555,7 @@ function AccountCard({
           Log in again
         </Button>
         {sharable ? (
-          <span className="ac-share" title={`${org}'s members can run their org sessions on this login too. It stays yours; flip it off any time.`}>
+          <span className="ac-share" title={`${org}'s members can use this login`}>
             <Toggle checked={a.shared} label={`Shared with ${org}`} disabled={busy} onChange={(v) => void run(() => api.shareWithOrg(a.id, v))} />
           </span>
         ) : null}
@@ -575,7 +567,7 @@ function AccountCard({
             icon={Icon.trash}
             className="ac-trash"
             aria-label={`Remove ${a.label}`}
-            title="Remove this account from agentbox. Its home stays on disk, and you can undo for 5 seconds."
+            title="Remove from agentbox"
             disabled={busy}
             onClick={onRemove}
           />
@@ -682,7 +674,7 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
       {open ? (
         <Modal
           title={`Use a usage reset on ${a.label}?`}
-          hint="A reset clears this account's spent rate-limit windows so the sessions stopped at its limit can carry on. It spends one credit and cannot be undone."
+          hint="Clears its spent limits. Uses one credit."
           onClose={() => setOpen(false)}
         >
           <div className="reset-choices">
@@ -690,7 +682,6 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
               <input type="radio" name="reset-credit" checked={chosen === ""} onChange={() => setChosen("")} />
               <span>
                 <strong>Let Codex choose</strong>
-                <span className="reset-desc">Uses the credit that applies to a window that is spent right now.</span>
               </span>
             </label>
             {list.map((c) => (
@@ -703,7 +694,6 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
                 </span>
               </label>
             ))}
-            {list.length === 0 ? <p className="hint">The credit that applies will be used.</p> : null}
           </div>
           <div className="modal-actions">
             <Button onClick={() => setOpen(false)}>Cancel</Button>
@@ -798,7 +788,7 @@ function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () =
       {l.state === "awaiting-user" && l.url ? (
         <ol className="lg-steps">
           <li>
-            <span className="lg-step-label">Open this and sign in to the account you want here:</span>
+            <span className="lg-step-label">Sign in:</span>
             <span className="lg-url-row">
               <a className="lg-url" href={l.url} target="_blank" rel="noreferrer">
                 <Icon.external size={14} />
@@ -810,7 +800,7 @@ function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () =
           {l.userCode ? (
             <li>
               <span className="lg-step-label">
-                {l.provider === "omp" ? "Check that the page shows this code (enter it if asked), then approve:" : "Enter this one-time code on that page:"}
+                {l.provider === "omp" ? "Confirm this code:" : "Enter this code:"}
               </span>
               <span className="lg-code-row">
                 <code className="lg-code">{l.userCode}</code>
@@ -820,7 +810,7 @@ function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () =
           ) : null}
           {l.needsPaste ? (
             <li>
-              <span className="lg-step-label">Paste the code the browser gives you back:</span>
+              <span className="lg-step-label">Paste the code from the browser:</span>
               <form
                 className="lg-paste"
                 onSubmit={(e) => {
@@ -843,7 +833,7 @@ function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () =
               </form>
             </li>
           ) : null}
-          {!l.userCode && !l.needsPaste ? <li className="hint">Finish in the browser; this updates on its own.</li> : null}
+          {!l.userCode && !l.needsPaste ? <li className="hint">Finish in the browser.</li> : null}
         </ol>
       ) : null}
 
@@ -884,11 +874,6 @@ function AddAccount({
   return (
     <Modal
       title={`Add ${provider === "omp" ? "an OpenCode Go" : `a ${PROVIDER_LABEL[provider]}`} account`}
-      hint={
-        provider === "omp"
-          ? "agentbox makes a home for it and starts an OpenCode Console sign-in: a link and a code, as `opencode auth login opencode` gives. omp and opencode sessions placed on it then use that sign-in. Nothing is copied from your other accounts."
-          : "agentbox makes a fresh credential home for it and starts the CLI's own login. Nothing is copied from your other accounts."
-      }
       onClose={onClose}
     >
       <form
@@ -901,15 +886,14 @@ function AddAccount({
           });
         }}
       >
-        <Field label="Label" hint="What you call it — defaults to the email once logged in.">
+        <Field label="Label" hint="Defaults to the email">
           <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. work, personal, team-b" />
         </Field>
         {expect ? (
           <p className="ac-twin">
             <Icon.alert size={12} />
             <span>
-              Sign in as <strong>{expect}</strong>. The login page uses whoever your browser is signed into, so switch accounts there
-              first if it is someone else.
+              Sign your browser in as <strong>{expect}</strong> first.
             </span>
           </p>
         ) : null}
@@ -931,10 +915,10 @@ function ImportHome({ provider, onClose }: { provider: ProviderId; onClose: () =
   const example = provider === "muse" ? "~/.config" : provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : provider === "omp" ? "~/.local/share/agentbox/accounts/<id>" : "~/.claude-work";
   const hint =
     provider === "muse"
-      ? "The XDG config root containing muse/auth.json. Dedicated homes use the file credential backend and keep sessions under <home>/data/muse. Credentials are read in place."
+      ? "The config root holding muse/auth.json."
       : provider === "omp"
-        ? "An agentbox account home holding opencode-console.json — a copy or a backup of one. agentbox reads it in place and never copies its sign-in."
-        : "Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials.";
+        ? "An agentbox account home holding opencode-console.json."
+        : "A logged-in CLAUDE_CONFIG_DIR or CODEX_HOME. Used in place.";
   return (
     <Modal
       title={`Import a ${PROVIDER_LABEL[provider]} home`}

@@ -101,8 +101,6 @@ export function Context({ state }: { state: AppState }) {
 
   return (
     <div className="cx">
-      <p className="cx-lede">What an agent is told before it starts, and where each piece comes from.</p>
-
       <div className="cx-scopes" role="group" aria-label="Who the context is read for">
         <span className="cx-scopes-label">Reading for</span>
         <button type="button" className={`chip ${!repo ? "on" : ""}`} aria-pressed={!repo} onClick={() => setScope("global")}>
@@ -152,27 +150,22 @@ export function Context({ state }: { state: AppState }) {
 
       <SkillsBlock state={state} repo={repo} />
 
-      <Block title="From agentbox" hint="The briefing agentbox adds itself: the same for every session, and not yours to edit here.">
+      <Block title="From agentbox" hint="Read-only. The same for every session.">
         <details className="cx-fixed">
           <summary>The briefing, verbatim</summary>
           <pre>{briefing}</pre>
         </details>
-        <p className="cx-hint">
-          Everything else a session hears — wait results, retries, recoveries, peer messages — is typed into its conversation
-          when it happens, and is in its transcript. MCP servers are on the MCPs page; accounts and their environments on
-          Accounts.
-        </p>
       </Block>
     </div>
   );
 }
 
-function Block({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+function Block({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <section className="cx-block" aria-label={title}>
       <header className="cx-block-head">
         <h2>{title}</h2>
-        <p>{hint}</p>
+        {hint ? <p>{hint}</p> : null}
       </header>
       <div className="cx-block-body">{children}</div>
     </section>
@@ -279,7 +272,6 @@ function DocCard({
             <Button size="sm" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <span className="cx-hint">{doc.kind === "rules" ? "Markdown, as it will read in the system prompt." : "The CLI's own file, edited in place."}</span>
           </div>
         </div>
       ) : body === undefined ? (
@@ -338,10 +330,7 @@ function SkillsBlock({ state, repo }: { state: AppState; repo: Repo | null }) {
   const chips = SCOPES.filter((s) => s === "all" || skills.some((k) => k.source === s));
 
   return (
-    <Block
-      title="Skills"
-      hint={repo ? `Skills an agent can open in ${repo.displayName}: its own, then yours.` : "Skills an agent can open by name: yours, and each repo's own."}
-    >
+    <Block title="Skills">
       <div className="cx-skill-bar">
         <span className="sk-search">
           <Icon.search size={13} />
@@ -376,7 +365,7 @@ function SkillsBlock({ state, repo }: { state: AppState; repo: Repo | null }) {
                   <span className="sk-row-name">
                     /{s.name}
                     {!s.modelInvocable ? (
-                      <span className="ghost" title="slash-command only — never fires on its own">
+                      <span className="ghost" title="Slash command only">
                         {" "}
                         ⌘
                       </span>
@@ -508,7 +497,6 @@ function SkillPanel({ skill, onClose }: { skill: SkillInfo; onClose: () => void 
             <Button size="sm" onClick={() => setEditing(false)}>
               cancel
             </Button>
-            <span className="cx-hint">edits SKILL.md on disk</span>
           </>
         ) : (
           <>
@@ -523,7 +511,7 @@ function SkillPanel({ skill, onClose }: { skill: SkillInfo; onClose: () => void 
               edit
             </Button>
             {skill.source === "project" ? (
-              <Button size="sm" icon={Icon.move} loading={busy} onClick={() => void promote()} title="copy to ~/.claude/skills — the repo copy stays put">
+              <Button size="sm" icon={Icon.move} loading={busy} onClick={() => void promote()} title="Copy to ~/.claude/skills">
                 promote
               </Button>
             ) : null}

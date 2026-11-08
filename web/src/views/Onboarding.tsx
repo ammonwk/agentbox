@@ -80,7 +80,7 @@ export function useOnboardingInbox(ob: Onboarding | null, sessions: readonly Ses
           type="button"
           className="inbox-dismiss"
           aria-label="Dismiss setup"
-          title="Dismiss — remembered per browser"
+          title="Dismiss"
           onClick={() => {
             localStorage.setItem(DISMISS_KEY, "1");
             setDismissed(true);
@@ -90,8 +90,8 @@ export function useOnboardingInbox(ob: Onboarding | null, sessions: readonly Ses
         </button>
       </div>
       <p className="inbox-sub">
-        agentbox derived you as <strong>{ob.identity.name}</strong>
-        {ob.identity.github ? ` (${ob.identity.github})` : ""} from this machine's git and gh config. Here is what is left:
+        Setting up for <strong>{ob.identity.name}</strong>
+        {ob.identity.github ? ` (${ob.identity.github})` : ""}
       </p>
       {items.map((it) => {
         const action = actionFor(it.id);

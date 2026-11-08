@@ -227,7 +227,7 @@ export function SystemBar({
         {worst && worst.name !== "cpu" && (worst.pressure ?? 0) > 0.82 ? (
           <span
             className="sys-cell narrow"
-            title={`${worst.name} is at ${worst.celsius.toFixed(0)}°C of its ${worst.critical?.toFixed(0)}°C limit — the closest of any sensor.`}
+            title={`${worst.name}: ${worst.celsius.toFixed(0)}°C of ${worst.critical?.toFixed(0)}°C`}
           >
             <span className="sys-figs">
               <span className="label">{worst.name} temp</span>
@@ -277,7 +277,7 @@ export function SystemBar({
         {diskFrac !== undefined ? (
           <span
             className="sys-cell narrow"
-            title={`${gb(sys.diskFree!)} free of ${gb(sys.diskTotal!)} — worktrees and transcripts live here`}
+            title={`${gb(sys.diskFree!)} free of ${gb(sys.diskTotal!)}`}
           >
             <span className="sys-figs">
               <span className="label">disk free</span>
@@ -429,11 +429,7 @@ function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: 
           <Line key={o.key} label={o.name} value={`${o.cpuPct}%`} tone={cpuTone(o.cpuPct)} note={o.note} frac={o.cpuPct / 100} />
         ))}
         {busy > named + 2 ? <Line label="short-lived" value={`${busy - named}%`} tone={cpuTone(busy - named)} frac={(busy - named) / 100} /> : null}
-        <p className="hint">
-          Share of the whole machine. A session counts everything it started, its
-          shell commands and their test databases included. Load {sys.load1.toFixed(0)} is the threads
-          running or waiting for a core{sys.psiCpu !== undefined ? `; something waited ${sys.psiCpu.toFixed(0)}% of the last ten seconds` : ""}.
-        </p>
+        <p className="hint">Load {sys.load1.toFixed(0)}</p>
       </Block>
 
       {limits.length > 0 ? (
@@ -520,10 +516,7 @@ function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: 
             value={`${sys.psiMem?.toFixed(0) ?? "–"}%`}
             frac={(sys.psiMem ?? 0) / 100}
           />
-          <p className="hint">
-            Share of the last ten seconds in which at least one task was stalled waiting for the
-            resource. Unlike utilisation, this measures what you feel.
-          </p>
+          <p className="hint">Time stalled, last 10s</p>
         </Block>
       ) : null}
     </div>

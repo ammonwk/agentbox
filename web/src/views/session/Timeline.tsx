@@ -906,9 +906,7 @@ function DialogCard({ sessionId, dialog }: { sessionId: string; dialog: PromptMe
           <span className="faint">
             <Spinner size={11} /> Chosen — waiting for the agent…
           </span>
-        ) : (
-          <span className="faint">The terminal follows the same choice.</span>
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -960,7 +958,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
     );
   }
   const queuedNote = queued ? (
-    <span className="faint" title="Waiting in the agent's queue: it arrives when the current step yields">
+    <span className="faint">
       {" "}
       · queued
     </span>
@@ -1538,13 +1536,13 @@ function ThinkingLive({ since, now, background }: { since: number; now: number; 
   const ms = Math.max(0, now - since);
   if (background) {
     return (
-      <div className="tl-live" role="status" title="The turn is over; it is waiting on teammates, background agents or shells it started">
+      <div className="tl-live" role="status" title="Waiting on background work">
         Waiting… <span className="tl-dur">{fmtDur(ms)}</span>
       </div>
     );
   }
   return (
-    <div className={`tl-live${ms > SLOW_MS ? " is-slow" : ""}`} role="status" title="The turn is running and its next step has not landed in the transcript yet">
+    <div className={`tl-live${ms > SLOW_MS ? " is-slow" : ""}`} role="status">
       <Spinner size={12} /> Thinking… <span className="tl-dur">{fmtDur(ms)}</span>
     </div>
   );

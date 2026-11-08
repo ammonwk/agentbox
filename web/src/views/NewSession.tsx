@@ -541,8 +541,8 @@ export function NewSession({
         {!wherePicked && projectMatches.length > 0 ? (
           <p className="ns-project-hint" role="status">
             {promptProject
-              ? "Project selected from your prompt. Choose Where to override."
-              : "Your prompt names several projects. Choose Where to pick the one to work in."}
+              ? "Project picked from your prompt"
+              : "Your prompt names several projects. Pick one in Where."}
           </p>
         ) : null}
 

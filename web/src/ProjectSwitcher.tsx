@@ -17,7 +17,7 @@ export function ProjectSwitcher({ repos, selected, onClose }: { repos: Repo[]; s
   // Two repos may share a name (a fork, a second clone): then the path tells them apart.
   const ambiguous = (r: Repo) => !!r.fullName && repos.some((o) => o.id !== r.id && (o.fullName === r.fullName || o.displayName === r.displayName));
   return (
-    <Modal title="Open a project" hint="One repository per project. It opens as a tab above the page; switching keeps all running work active." onClose={onClose}>
+    <Modal title="Open a project" onClose={onClose}>
       <input
         className="input"
         autoFocus
@@ -52,7 +52,6 @@ export function ProjectSwitcher({ repos, selected, onClose }: { repos: Repo[]; s
         <button type="button" className="project-option" aria-pressed={!selected} onClick={() => pick(null)}>
           <span>
             <strong>All projects</strong>
-            <small>Overview, general conversations and unassigned work</small>
           </span>
           {!selected && <Icon.check />}
         </button>

@@ -151,11 +151,6 @@
   min-height: 0;
 }
 
-.mc-form-lead {
-  margin: 6px 0 12px;
-  font-size: 12.5px;
-}
-
 .mc-form {
   display: flex;
   flex-direction: column;
