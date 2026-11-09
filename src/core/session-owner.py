@@ -7,6 +7,7 @@ import re
 import selectors
 import subprocess
 import sys
+import time
 
 
 def start(pid):
@@ -34,9 +35,14 @@ def watch(pid, born, scope, dependencies):
 
 
 def arm(pid, dependencies=()):
-    scope = Path(f'/proc/{pid}/cgroup').read_text().strip().split('/')[-1]
-    if not re.fullmatch(r'(?:tmux-spawn|agentbox-command)-[a-f0-9-]+\.scope', scope):
-        raise RuntimeError(f'agent did not start in a tmux pane scope: {scope}')
+    # tmux asks systemd to move a new pane into its scope while the pane already runs; on a loaded box (11-09, load 330)
+    # the move landed after this read, the launch refused and the session died 2s in. Wait for it.
+    deadline = time.monotonic() + 15
+    while not re.fullmatch(r'(?:tmux-spawn|agentbox-command)-[a-f0-9-]+\.scope',
+                           scope := Path(f'/proc/{pid}/cgroup').read_text().strip().split('/')[-1]):
+        if time.monotonic() > deadline:
+            raise RuntimeError(f'agent did not start in a tmux pane scope: {scope}')
+        time.sleep(0.2)
     born = start(pid)
     env = dict(os.environ, XDG_RUNTIME_DIR=f'/run/user/{os.getuid()}')
     subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec',
