@@ -837,7 +837,7 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       const rec = getSessionRecord(v.id);
       if (!rec?.accountId) continue;
-      const next = rec.hoppedAt || this.modelWide(v) ? null : this.hopTarget(rec, v);
+      const next = rec.hoppedAt || this.modelWide(v, now) ? null : this.hopTarget(rec, v);
       // Another is on its way over: this one is looked at again once it has landed.
       if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
@@ -848,10 +848,13 @@ export class Fleet extends EventEmitter {
   /** Is the limit this session stopped at its model's on every account, not
    *  its account's? Another account's session on the same model stopped at
    *  one within minutes of it. Moving it would only meet the limit again
-   *  (the free model's 429 on 2026-10-21), so it waits out `until` where it is. */
-  private modelWide(v: Session): boolean {
+   *  (the free model's 429 on 2026-10-21), so it waits out `until` where it is.
+   *  Never when its account's usage shows a window spent: that is the limit,
+   *  and two accounts running dry together is a busy morning, not the model
+   *  (2026-11-09, two Claude accounts' weekly limits two seconds apart). */
+  private modelWide(v: Session, now: number): boolean {
     const model = v.model?.split(":")[0];
-    if (!model) return false;
+    if (!model || this.spentUntil(v.accountId, v.limitHit!, now) !== null) return false;
     const at = v.limitHit!.at;
     for (const o of this.views.values()) {
       if (o.limitHit && o.accountId !== v.accountId && o.model?.split(":")[0] === model && Math.abs(o.limitHit.at - at) <= MODEL_WIDE_WITHIN_MS) return true;
