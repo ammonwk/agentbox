@@ -12,10 +12,11 @@
  * disagree reports the wrong state in exactly the case it exists to catch.
  *
  * Probing costs subprocesses and `gh auth status` can touch the network, so the
- * snapshot is cached. It must never be called from a broadcast path.
+ * snapshot is cached, a stale one is answered while it is probed again, and a
+ * probe never blocks the server: a `gh` waiting on GitHub once held its event
+ * loop for eight minutes. It must never be called from a broadcast path.
  */
 
-import { run } from "./core/git";
 import type { DepSnapshot, DepStatus } from "./core/types";
 
 export type { DepSnapshot, DepStatus } from "./core/types";
@@ -26,27 +27,33 @@ export type { DepSnapshot, DepStatus } from "./core/types";
  * has just fixed their `gh` auth and pressed Re-check.
  */
 const TTL_MS = 60_000;
+/** A probe still running after this is killed. */
+const PROBE_TIMEOUT_MS = 10_000;
 
 interface Attempt {
   code: number;
+  stdout: string;
   /** Everything the program said, both streams, trimmed. */
   said: string;
   /** The program could not be found to run at all. */
   absent: boolean;
+  /** Killed at PROBE_TIMEOUT_MS. */
+  timedOut: boolean;
 }
 
-function attempt(cmd: string[]): Attempt {
-  const res = run(cmd);
-  const said = `${res.stderr}\n${res.stdout}`.trim();
-  return {
-    code: res.code,
-    said,
-    absent: /executable not found|command not found|ENOENT|no such file/i.test(said),
-  };
+async function attempt(cmd: string[]): Promise<Attempt> {
+  try {
+    const p = Bun.spawn(cmd, { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: PROBE_TIMEOUT_MS });
+    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { code, stdout, said: `${stderr}\n${stdout}`.trim(), absent: false, timedOut: p.signalCode !== null };
+  } catch (err) {
+    // Bun.spawn throws on a missing binary rather than exiting non-zero.
+    return { code: 127, stdout: "", said: (err as Error).message, absent: true, timedOut: false };
+  }
 }
 
-function probeTmux(): DepStatus {
-  const r = attempt(["tmux", "-V"]);
+async function probeTmux(): Promise<DepStatus> {
+  const r = await attempt(["tmux", "-V"]);
   if (r.absent) {
     return { state: "missing", detail: "tmux is not on PATH — every agentbox session runs in tmux, so nothing can start without it" };
   }
@@ -56,8 +63,8 @@ function probeTmux(): DepStatus {
   return { state: "ok", detail: r.said.split("\n")[0]?.trim() || "installed" };
 }
 
-function probeGit(): DepStatus {
-  const r = attempt(["git", "--version"]);
+async function probeGit(): Promise<DepStatus> {
+  const r = await attempt(["git", "--version"]);
   if (r.absent) {
     return { state: "missing", detail: "git is not on PATH — sessions cannot cut worktrees without it" };
   }
@@ -74,11 +81,12 @@ interface GhAuthEntry {
   login?: string;
 }
 
-function probeGh(): DepStatus {
+async function probeGh(): Promise<DepStatus> {
   // The JSON form, because it is the only one that tells a token GitHub
   // refused from a GitHub that could not be reached: offline, the text form
   // calls every token "invalid", so a laptop waking up read as logged out.
-  const res = run(["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"]);
+  const res = await attempt(["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"]);
+  if (res.timedOut) return { state: "ok", detail: `GitHub did not answer gh in ${PROBE_TIMEOUT_MS / 1000}s, so its login is unchecked` };
   let hosts: Record<string, GhAuthEntry[]> | undefined;
   try {
     hosts = (JSON.parse(res.stdout) as { hosts?: Record<string, GhAuthEntry[]> }).hosts;
@@ -101,8 +109,8 @@ function probeGh(): DepStatus {
   return { state: "ok", detail: `logged in${entry.login ? ` as ${entry.login}` : ""}; GitHub did not answer, so the token is unchecked` };
 }
 
-function probeGhText(): DepStatus {
-  const r = attempt(["gh", "auth", "status"]);
+async function probeGhText(): Promise<DepStatus> {
+  const r = await attempt(["gh", "auth", "status"]);
   if (r.absent) {
     return { state: "missing", detail: "gh is not installed — pull request data will be empty (cli.github.com)" };
   }
@@ -122,10 +130,18 @@ function probeGhText(): DepStatus {
 }
 
 let cached: DepSnapshot | null = null;
+let probing: Promise<DepSnapshot> | null = null;
 
-/** The cached dependency states, re-probed when stale or when forced. */
-export function dependencies(force = false): DepSnapshot {
-  if (!force && cached && Date.now() - cached.at < TTL_MS) return cached;
-  cached = { tmux: probeTmux(), gh: probeGh(), git: probeGit(), at: Date.now() };
+async function probeAll(): Promise<DepSnapshot> {
+  const [tmux, gh, git] = await Promise.all([probeTmux(), probeGh(), probeGit()]);
+  cached = { tmux, gh, git, at: Date.now() };
   return cached;
+}
+
+/** The dependency states: a stale snapshot is answered while it is probed
+ *  again; with `force`, or with none yet, the probe is waited for. */
+export function dependencies(force = false): Promise<DepSnapshot> {
+  const fresh = cached !== null && Date.now() - cached.at < TTL_MS;
+  if (force || !fresh) probing ??= probeAll().finally(() => { probing = null; });
+  return force || !cached ? probing! : Promise.resolve(cached);
 }

@@ -324,7 +324,7 @@ async function refreshSlow(): Promise<void> {
   slow.prs = openPrs(fleet.sessions());
   slow.tmuxMissing = !tmux.tmuxVersion();
   // Each of these runs a program; none belongs on the cold path.
-  const deps = dependencies(false);
+  const deps = await dependencies(false);
   slow.depsOk = deps.tmux.state === "ok" && deps.git.state === "ok";
   slow.ghReady = deps.gh.state === "ok";
   slow.serviceInstalled = serviceInstalled();
@@ -825,7 +825,7 @@ const router = new Router(mapError)
       await detectProviders();
       scheduleCold();
     }
-    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh), revision: RUNNING_REVISION };
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: await dependencies(refresh), revision: RUNNING_REVISION };
     if (!booted) health.starting = startupProgress();
     return json(health);
   })

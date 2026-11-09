@@ -316,7 +316,7 @@ async function onboard(): Promise<number> {
   // cold state — no server needed, so this works before the first serve too.
   // An account counts only when its credentials read as ok: registered is
   // not logged in.
-  const deps = dependencies(false);
+  const deps = await dependencies(false);
   const accounts = listAccounts();
   const identities = await Promise.allSettled(accounts.map((a) => identify(a)));
   const items = onboardingItems({
@@ -355,9 +355,9 @@ function pwaDetail(): string {
   return fixed.length ? `patched ${fixed.join(", ")} (Chrome's Wayland app-id bug)` : "ok";
 }
 
-function doctor(): number {
+async function doctor(): Promise<number> {
   ensureDirs();
-  const deps = dependencies(true);
+  const deps = await dependencies(true);
   const uiBuilt = existsSync(join(webDist, "index.html"));
   const dep = (name: string, d: DepStatus, fatal: boolean): Check => ({ name, ok: d.state === "ok", detail: d.detail ?? d.state, fatal });
   const which = (bin: string) => Bun.spawnSync(["sh", "-c", `command -v ${bin}`]).exitCode === 0;
@@ -844,7 +844,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "devin-bridge":
         return await devinBridge(argv[1]);
       case "doctor":
-        return doctor();
+        return await doctor();
       case "serve-from-commit":
         return serveFromCommit(argv[1]);
       case "integrate":
