@@ -41,6 +41,13 @@
  * the part of the pace's span its session was not yet here to be measured: a
  * session started ten minutes ago is mostly claim, one running for an hour is
  * already in the pace.
+ *
+ * Every window is paced, not just the 5-hour one: an account whose budget is
+ * on pace to run out within the next five hours, before it resets, takes
+ * nothing new either. Its running sessions will spend what it has; what it
+ * is given more only stalls there. Claims alone would not see it: eight
+ * orchestrators claiming a quarter point each went to an account with 14
+ * weekly points left that was burning 10 an hour.
  */
 
 import { claimFor } from "./claim";
@@ -60,8 +67,8 @@ import type {
 export interface AccountState {
   account: Pick<Account, "id" | "label" | "enabled">;
   windows: UsageWindow[];
-  /** Readings of the short window over the last hour and a half, oldest first. */
-  shortSamples?: { at: number; usedPct: number; resetsAt: number | null }[];
+  /** Readings of its windows over the last hour and a half, oldest first. */
+  samples?: { windowId: string; at: number; usedPct: number; resetsAt: number | null }[];
   /** Each active session pinned here: its outstanding weekly points, and
    *  since when it has been spending here (started, or woken onto it). */
   claims: { outstanding: number; since: number }[];
@@ -157,6 +164,10 @@ const PACE_MIN_SPAN = 10 * 60_000;
 /** Running out this long before the reset is a stall worth avoiding; less is a
  *  pause, and the account is otherwise about to be fresh. */
 const STALL_MS = 10 * 60_000;
+/** A run-out further off than this is not forecast: a new session's work is
+ *  done by then, and three quarters of an hour of readings say nothing about
+ *  a day. Within it, a week runs out like a 5-hour window does. */
+const RUN_OUT_HORIZON = FIVE_HOURS;
 
 /** The unscoped weekly window, if the provider reports one. */
 function weeklyWindow(windows: UsageWindow[]): UsageWindow | null {
@@ -197,24 +208,39 @@ function hoursLeft(w: UsageWindow, now: number): number {
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
 /**
- * How fast the short window is filling, in its points an hour: from the
- * reading about `PACE_SPAN` ago (or the first of this window, if it started
- * since) to now. Readings are stored when they change, so a flat stretch has
- * none; the last one before the span stands for its start. Null when the
- * window is not running or the readings cover too little time.
+ * How fast a window is filling, in its points an hour: from the reading about
+ * `PACE_SPAN` ago (or the first of this window, if it started since) to now.
+ * Readings are stored when they change, so a flat stretch has none; the last
+ * one before the span stands for its start. Null when the window is not
+ * running or the readings cover too little time.
  */
 function paceOf(
-  short: UsageWindow,
-  samples: AccountState["shortSamples"],
+  w: UsageWindow,
+  samples: AccountState["samples"],
   now: number,
 ): { perHour: number; since: number } | null {
-  if (short.resetsAt === null || short.resetsAt <= now || !samples?.length) return null;
-  const same = samples.filter((s) => s.resetsAt !== null && Math.abs(s.resetsAt - short.resetsAt!) < 10 * 60_000 && s.at <= now);
+  if (w.resetsAt === null || w.resetsAt <= now || !samples?.length) return null;
+  const same = samples.filter(
+    (s) => s.windowId === w.id && s.resetsAt !== null && Math.abs(s.resetsAt - w.resetsAt!) < 10 * 60_000 && s.at <= now,
+  );
   if (!same.length) return null;
   const base = [...same].reverse().find((s) => s.at <= now - PACE_SPAN) ?? same[0]!;
   const span = now - base.at;
   if (span < PACE_MIN_SPAN) return null;
-  return { perHour: Math.max(0, (short.usedPct - base.usedPct) / (span / HOUR)), since: base.at };
+  return { perHour: Math.max(0, (w.usedPct - base.usedPct) / (span / HOUR)), since: base.at };
+}
+
+/**
+ * When a window at `used` fills up at `pace`, with `ahead` of its points
+ * still to come from sessions the pace has not seen; null when that is not
+ * before it resets, or not within `RUN_OUT_HORIZON`. A window reading 100%
+ * has no run-out: how much it has left is unknown (see the gate in
+ * `evaluate`).
+ */
+function runsOutAt(w: UsageWindow, used: number, pace: { perHour: number } | null, ahead: number, now: number): number | null {
+  if (!pace || pace.perHour <= 0 || used >= 100 || w.resetsAt === null) return null;
+  const at = now + (Math.max(0, 100 - used - ahead) / pace.perHour) * HOUR;
+  return at < w.resetsAt && at < now + RUN_OUT_HORIZON ? Math.round(at) : null;
 }
 
 /** The share of a claim the pace has not seen: how much of the pace's span
@@ -236,9 +262,12 @@ function rates(a: number, b: number): [string, string] {
   return [a.toFixed(d), b.toFixed(d)];
 }
 
-/** On pace to hit the 5-hour limit well before the window resets. */
+/** On pace to hit a limit well before it resets: a session there stops mid-work. */
+const stalls = (at: number | null | undefined, resetsAt: number | null | undefined): boolean =>
+  at != null && resetsAt != null && resetsAt - at > STALL_MS;
+
 function runsOut(c: Candidate): boolean {
-  return c.shortRunsOutAt !== null && c.shortResetsAt !== null && c.shortResetsAt - c.shortRunsOutAt > STALL_MS;
+  return stalls(c.shortRunsOutAt, c.shortResetsAt) || stalls(c.budget?.runsOutAt, c.budget?.resetsAt);
 }
 
 function evaluate(
@@ -251,12 +280,20 @@ function evaluate(
   const weekly = weeklyWindow(state.windows);
   const short = shortWindow(state.windows);
   const perWeekly = Object.fromEntries(state.windows.map((w) => [w.id, state.perWeekly?.[w.id] ?? coldPerWeekly(w)]));
+  // Every window's measured pace, and the claims it has not seen yet (in
+  // weekly points): sessions too new for the pace to have measured.
+  const paced = (w: UsageWindow) => {
+    const pace = paceOf(w, state.samples, now);
+    const unseen = pace ? state.claims.reduce((a, cl) => a + cl.outstanding * unseenShare(cl.since, pace.since, now), 0) : 0;
+    return { pace, unseen };
+  };
   // Each budget with the claims on it, in its own percent; what is left of
   // it in weekly points. The one with the least left is the account's.
   const budgets = budgetWindows(state.windows, req.model).map((w) => {
     const used = round1(usedNow(w, now));
     const effective = round1(used + outstanding * perWeekly[w.id]!);
-    return { w, used, effective, left: (100 - effective) / perWeekly[w.id]! };
+    const { pace, unseen } = paced(w);
+    return { w, used, effective, left: (100 - effective) / perWeekly[w.id]!, pace, runsOutAt: runsOutAt(w, used, pace, unseen * perWeekly[w.id]!, now) };
   });
   const binding = [...budgets].sort((a, b) => a.left - b.left || Number(a.w !== weekly) - Number(b.w !== weekly))[0] ?? null;
 
@@ -274,6 +311,8 @@ function evaluate(
       effective: binding.effective,
       resetsAt: binding.w.resetsAt,
       left: round1(binding.left),
+      pace: binding.pace && round1(binding.pace.perHour),
+      runsOutAt: binding.runsOutAt,
     },
     perHour: binding && Math.round((Math.max(0, binding.left) / Math.max(hoursLeft(binding.w, now), 0.25)) * 1000) / 1000,
     perWeekly,
@@ -296,15 +335,11 @@ function evaluate(
     // stands at reset if it keeps filling this fast, plus the claims of
     // sessions too new for the pace to have seen (the rest are in it
     // already). Otherwise every claim is all there is to go on.
-    const pace = paceOf(short, state.shortSamples, now);
+    const { pace, unseen } = paced(short);
     if (pace !== null) {
       c.shortPace = round1(pace.perHour);
-      const unseen = state.claims.reduce((a, cl) => a + cl.outstanding * unseenShare(cl.since, pace.since, now), 0);
       c.shortEffective = round1(c.short + pace.perHour * hoursLeft(short, now) + inShort(unseen));
-      if (pace.perHour > 0 && c.short < 100) {
-        const at = now + ((100 - c.short) / pace.perHour) * HOUR;
-        if (short.resetsAt !== null && at < short.resetsAt) c.shortRunsOutAt = Math.round(at);
-      }
+      c.shortRunsOutAt = runsOutAt(short, c.short, pace, inShort(unseen), now);
     } else {
       c.shortEffective = round1(c.short + inShort(outstanding));
     }
@@ -361,9 +396,13 @@ function evaluate(
     c.eligible = false;
     c.wall = true;
     c.reason = `its provider stopped a session at ${clockOf(s.at)} (${s.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(s.until)}`;
-  } else if (runsOut(c)) {
+  } else if (stalls(c.shortRunsOutAt, c.shortResetsAt)) {
     c.eligible = false;
     c.reason = `at its pace (+${c.shortPace}%/h) it hits its 5-hour limit at ${clockOf(c.shortRunsOutAt!)}, before it resets at ${clockOf(c.shortResetsAt!)}`;
+  } else if (c.budget && stalls(c.budget.runsOutAt, c.budget.resetsAt)) {
+    const b = c.budget;
+    c.eligible = false;
+    c.reason = `at its pace (+${b.pace}%/h) its ${b.label.toLowerCase()} runs out at ${clockOf(b.runsOutAt!)}, before it resets ${dayOf(b.resetsAt!)}`;
   } else if (spokenFor) {
     c.eligible = false;
     c.reason = `${spokenFor.w.label.toLowerCase()} is spoken for: ${spokenFor.used}% used + ${round1(spokenFor.effective - spokenFor.used)} claimed by running sessions`;

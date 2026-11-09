@@ -2905,16 +2905,11 @@ export class Fleet extends EventEmitter {
       .map((a) => {
         const usage = this.deps.usage.usageOf(a.id);
         const windows = usage?.windows ?? [];
-        const short = windows.find((w) => w.kind === "short" && !w.scope);
         return {
           account: a,
           windows,
-          // For its pace: how fast the 5-hour window is really filling.
-          shortSamples: short
-            ? usageSamplesSince(since, a.id)
-                .filter((r) => r.windowId === short.id)
-                .map((r) => ({ at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt }))
-            : [],
+          // For their pace: how fast each window is really filling.
+          samples: usageSamplesSince(since, a.id).map((r) => ({ windowId: r.windowId, at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt })),
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
           auth: this.deps.usage.authOf?.(a.id),

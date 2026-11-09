@@ -686,7 +686,7 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     budget:
       weekly == null || weeklyEffective == null
         ? null
-        : { id: weeklyW!.id, label: weeklyW!.label, used: weekly, effective: weeklyEffective, resetsAt: weeklyW!.resetsAt, left: 100 - weeklyEffective },
+        : { id: weeklyW!.id, label: weeklyW!.label, used: weekly, effective: weeklyEffective, resetsAt: weeklyW!.resetsAt, left: 100 - weeklyEffective, pace: null, runsOutAt: null },
     perHour: weeklyPerHour,
     perWeekly: Object.fromEntries(a.usage.windows.map((w) => [w.id, w.kind === "short" ? shortPerWeekly : w.kind === "monthly" ? 0.5 : 1])),
     need: shortW ? Math.round(b.claimNormal * shortPerWeekly * 10) / 10 : null,

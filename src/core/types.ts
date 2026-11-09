@@ -229,9 +229,20 @@ export interface Candidate {
   /** The budget that runs out first with the claims on it: of the windows
    *  longer than the 5-hour one (the weekly, Go's monthly, the model's own
    *  weekly), the one with the fewest weekly points left. `used` and
-   *  `effective` are its own percent, `left` weekly points. Null with no
-   *  such window. */
-  budget: { id: string; label: string; used: number; effective: number; resetsAt: number | null; left: number } | null;
+   *  `effective` are its own percent, `left` weekly points; `pace` its
+   *  percent an hour at the last readings, and `runsOutAt` when it fills at
+   *  that pace (claims the pace has not seen added), if before it resets.
+   *  Null with no such window. */
+  budget: {
+    id: string;
+    label: string;
+    used: number;
+    effective: number;
+    resetsAt: number | null;
+    left: number;
+    pace: number | null;
+    runsOutAt: number | null;
+  } | null;
   /** Weekly points left of `budget` per hour until it resets. */
   perHour: number | null;
   /** How many of each window's points one weekly point is here (rates.ts),
