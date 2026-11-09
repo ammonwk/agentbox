@@ -1576,9 +1576,10 @@ export class Fleet extends EventEmitter {
    * its resume is proven (directory and transcript), as with adopt.
    *
    * "Running" counts too once the turn has been silent for `STALE_TURN_MS`:
-   * Claude's status file stays "busy" for days on a lead with teammates. A
-   * session showing a permission prompt ("blocked") is never parked — it is
-   * waiting on you for something a resume would lose.
+   * Claude's status file stays "busy" for days on a lead with teammates. So
+   * does "blocked": a dialog nobody has answered in that long (one sat four
+   * days on a safeguards pause) is not about to be, and crash recovery parks
+   * it all the same. The resume says which dialog went with the process.
    */
   private async parkIdle(now: number, idleMin: number): Promise<void> {
     if (!idleMin) {
@@ -1603,7 +1604,7 @@ export class Fleet extends EventEmitter {
         (now > v.cacheWarmUntil || done(v) || survives(v)) &&
         (this.liveStatus.get(v.id) === "waiting"
           ? now - v.lastActivityAt >= idleOf(v)
-          : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
+          : (this.liveStatus.get(v.id) === "running" || this.liveStatus.get(v.id) === "blocked") && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
     );
     const holds = new Map<string, string>();
     const clean = new Map<string, ParkCheck>();
@@ -1672,7 +1673,9 @@ export class Fleet extends EventEmitter {
             continue;
           }
           for (const [pid, start] of starts) this.dying.set(pid, { since: this.now(), start, termed: false });
-          updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: null });
+          const dialog = this.liveStatus.get(v.id) === "blocked" ? (this.blocked.get(v.id) ?? "a prompt") : null;
+          const why = dialog && `it sat ${minutes(now - v.lastActivityAt)} on "${dialog}" with no answer and was parked, which dismissed it; this message resumed it.`;
+          updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: why });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
           this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false, work: null });
