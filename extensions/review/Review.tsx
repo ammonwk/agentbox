@@ -535,7 +535,8 @@ function SwipeCard({
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
     drag.current = null;
-    if (!d.moved) return;
+    // A tap opens the long version, as an up swipe does.
+    if (!d.moved) return onUp();
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
     place(0, 0, false);
