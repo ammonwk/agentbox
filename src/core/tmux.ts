@@ -276,6 +276,9 @@ const PASTE_POLL_MS = 30;
 const PASTE_SHOWN_MS = 2_000;
 /** A pane that shows nothing of a paste for this long has not taken it. */
 const PASTE_WAIT_MS = 10_000;
+/** How long a TUI has to turn bracketed paste on: one starting on a loaded
+ *  machine draws its splash for many seconds before it does. */
+const BRACKETED_WAIT_MS = 60_000;
 /** How long one Enter has to empty the input box, and how many are pressed. */
 const ENTER_WAIT_MS = 3_000;
 const ENTER_TRIES = 3;
@@ -295,10 +298,17 @@ export class Unsubmitted extends Error {}
  * Enter pressed again while the draft still sits there; a draft that outlasts
  * them throws `Unsubmitted`, so nothing reports a message sent that was only typed.
  *
+ * tmux brackets a paste only for a pane that asked for it, and turns each
+ * line break of an unbracketed one into Enter: a multi-line message pasted
+ * before the TUI turned bracketed paste on goes out as one message per line.
+ *
  * With `pieces` (`ProviderAdapter.pasteInPieces`), the message goes in as many
  * small pastes, with the line breaks pressed as keys: see `pasteInPieces`.
  */
 export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
+  if (!opts.pieces && /[\r\n]/.test(text) && !(await bracketedPasteOn(name))) {
+    throw new Unsubmitted(`its pane did not turn bracketed paste on in ${BRACKETED_WAIT_MS / 1000}s, so nothing was typed: each line would have gone out as a message of its own`);
+  }
   const before = screenRows(name);
   if (opts.pieces) pasteInPieces(name, text, opts.pieces);
   else pasteBuffers(name, [text]);
@@ -336,6 +346,16 @@ async function submit(name: string, draft: DraftRow): Promise<void> {
 }
 
 const screenRows = (name: string): string[] => (capture(name) ?? "").split("\n");
+
+async function bracketedPasteOn(name: string): Promise<boolean> {
+  const deadline = Date.now() + BRACKETED_WAIT_MS;
+  for (;;) {
+    const r = await tmuxAsync(["display-message", "-p", "-t", `=${name}:`, "#{bracket_paste_flag}"]);
+    if (r.stdout.trim() === "1") return true;
+    if (r.code !== 0 || Date.now() >= deadline) return false;
+    await Bun.sleep(250);
+  }
+}
 
 /** A row as an input box holds it: its border or prompt glyph, and its first words, both without spaces. */
 interface RowHead {
