@@ -241,7 +241,7 @@ export const api = {
   pushTest: () => post<{ sent: number; failed: string[] }>("/api/push/test"),
 
   // sessions
-  placement: (input: { provider: ProviderId; model?: string; scope?: Scope }) =>
+  placement: (input: { provider: ProviderId; model?: string; scope?: Scope; accountId?: string }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
   models: (accountId: string, provider?: ProviderId) =>

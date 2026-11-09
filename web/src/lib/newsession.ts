@@ -82,10 +82,13 @@ export function rankModels(
   catalog: readonly ModelOption[],
   sessions: readonly Pick<Session, "provider" | "model" | "lastActivityAt" | "origin">[],
   provider: ProviderId,
+  /** Which recent models the account can run: one another service sells is
+   *  left out (the catalog is the account's already). */
+  sells: (model: string) => boolean = () => true,
 ): ModelChoice[] {
   const used = new Map<string, number>();
   for (const s of sessions) {
-    if (s.provider !== provider || !s.model || s.origin !== "agentbox") continue;
+    if (s.provider !== provider || !s.model || s.origin !== "agentbox" || !sells(s.model)) continue;
     used.set(s.model, Math.max(used.get(s.model) ?? 0, s.lastActivityAt));
   }
   const byId = new Map(catalog.map((m) => [m.id, m]));

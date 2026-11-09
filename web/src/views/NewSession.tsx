@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule, Scope } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
-import { runsOn } from "../../../src/core/providers/account";
+import { runsOn, servesModel } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
@@ -223,6 +223,21 @@ export function NewSession({
   }, [provider, model, scope]);
 
   const manual = accountId !== "auto" ? accounts.find((a) => a.id === accountId) ?? null : null;
+  // What Default runs on a pinned account whose service does not sell the
+  // CLI's default: that service's own (`Placement.model`).
+  const [pinDefault, setPinDefault] = useState<string | null>(null);
+  useEffect(() => {
+    setPinDefault(null);
+    if (!manual || model) return;
+    let cancelled = false;
+    api.placement({ provider, scope, accountId: manual.id }).then(
+      (p) => !cancelled && setPinDefault(p.model ?? null),
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, scope, manual?.id, model]);
   // The account whose models to offer: the pin, else where Auto would go.
   const target = manual ?? accounts.find((a) => a.id === placement?.accountId) ?? accounts[0] ?? null;
 
@@ -243,9 +258,11 @@ export function NewSession({
     };
   }, [target?.id, provider, catalogTry]);
 
+  // Pinned, only what its service sells; on Auto, a recent model of another
+  // service stays, and picking it moves Auto's pick there.
   const models = useMemo(
-    () => rankModels(catalog, state.sessions, provider),
-    [catalog, state.sessions, provider],
+    () => rankModels(catalog, state.sessions, provider, (m) => !manual || servesModel(manual.service, provider, m)),
+    [catalog, state.sessions, provider, manual],
   );
   // A catalog entry can pin its own levels (codex's models_cache names them
   // per model); the picked model's list wins over the provider's static one.
@@ -543,7 +560,7 @@ export function NewSession({
                 models={models}
                 value={model}
                 onChange={(m) => setChoice({ model: m })}
-                defaultId={state.settings.models[provider] || null}
+                defaultId={state.settings.models[provider] || pinDefault || null}
                 agent={PROVIDER_LABEL[provider]}
               />
               {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
