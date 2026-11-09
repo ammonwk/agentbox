@@ -238,6 +238,18 @@ export interface JobRead {
   running: boolean;
 }
 
+/** Stop a job, not waited for: its unit's whole cgroup goes (KillMode=control-group). */
+export function stopJob(spec: JobSpec): void {
+  if (isLaunchdJob(spec.unit)) {
+    void stopLaunchdJob(spec).catch((e) => console.error(`agentbox: stopping ${spec.unit}:`, e));
+    return;
+  }
+  spawn("systemctl", ["--user", "stop", "--no-block", spec.unit], {
+    stdio: "ignore",
+    env: { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}` },
+  }).on("error", (e) => console.error(`agentbox: stopping ${spec.unit}:`, e));
+}
+
 /** Asked without blocking: every job wait is looked at every two seconds,
  *  and a loaded machine can take a while to answer. */
 export async function readJob(spec: JobSpec): Promise<JobRead> {

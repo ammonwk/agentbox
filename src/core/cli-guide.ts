@@ -274,17 +274,16 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   with its title indented \`└\`, and \`show\` names its parent and children.
   Every verb acts on exactly the ids it is given, except close: closing a
   parent closes the sessions it started, at any depth, with it (running ones
-  are stopped, and the app asks first when any are), but leaves open, and
-  names, any that has a wait armed or has claimed an open PR, with what that
-  one started. Stopping a parent
+  are stopped, and the app asks first when any are), and stops every job any
+  of them started with \`wait job\`; \`close --orphan\` closes it alone and
+  leaves what it started running. Stopping a parent
   leaves its children alone, so list them (\`ls | grep\`, or \`ls --json | jq\`
   on \`.parent\`) to act on them too. The exception is subagents (host
   \`sub\`): the parent runs them, so stopping or closing it stops every one
   mid-task, and none can be stopped, sent to or adopted on its own. Ask before
   stopping a session that has running subagents. What you start with \`agentbox claude|codex --detach\` is
   your child too (\`show\` lists it), so closing you would close it: a session
-  with work under it is stopped, not closed, or its children are moved first
-  (the board's drag; \`PATCH /api/sessions/:id\` with \`parent\`).
+  with work under it is stopped, not closed, or closed with \`--orphan\`.
 - A card is how you ask the user something when you are not the session
   they are looking at, or tell them what you did without making them read
   your conversation. Their answer is typed into you as their own message,

@@ -464,7 +464,8 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]
                         a line each time one starts asking, finishes its turn
                         (with the end of its last message), or stops; until killed
-  close <id>...         stop it and take it, and the sessions it started, off the list; resumable
+  close <id>... [--orphan]  stop it, the sessions it started and every job they ran, and take them off the list;
+                        resumable. --orphan: close it alone, leaving what it started running at the root
   reopen <id>...        put a closed one back on the list (still stopped)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not

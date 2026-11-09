@@ -1224,7 +1224,7 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const closed = requireBoolean(b, "closed");
     const worktree = closed && b.removeWorktree === true ? fleet.get(params.id!).worktree : null;
-    const out = await fleet.close(params.id!, closed);
+    const out = await fleet.close(params.id!, closed, b.orphan === true);
     // A checkout cut at a ref for it (`ref` in a start), once it is done:
     // gone when nothing in it would be lost, else left to the reclaim.
     const removed = worktree ? removeDetachedWorktree(worktree) : false;

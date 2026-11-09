@@ -321,6 +321,7 @@ export function Confirm({
   confirmLabel = danger ? "Delete" : "Confirm",
   onConfirm,
   onCancel,
+  other,
 }: {
   title: string;
   body: ReactNode;
@@ -328,6 +329,8 @@ export function Confirm({
   confirmLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** A second way through, beside Cancel. */
+  other?: { label: string; onClick: () => void };
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -344,6 +347,7 @@ export function Confirm({
         <Button ref={cancelRef} onClick={onCancel}>
           Cancel
         </Button>
+        {other ? <Button onClick={other.onClick}>{other.label}</Button> : null}
         <Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>
           {confirmLabel}
         </Button>

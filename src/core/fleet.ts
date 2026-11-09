@@ -59,6 +59,7 @@ import {
   usageSamplesSince,
   type SessionRecord,
 } from "./db";
+import { stopJob } from "./waitreads";
 import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { ensureCheckout } from "./worktrees";
@@ -249,12 +250,11 @@ export interface FleetDeps {
   now?: () => number;
 }
 
-/** What a close took with it, and what it left open, to follow "closed <id>". */
-function closedWords(also: string[], kept: Closed["kept"], dropped: string[]): string {
+/** What a close took with it, and what they gave up, to follow "closed <id>". */
+function closedWords(also: string[], dropped: string[]): string {
   return (
     (also.length ? `, with the sessions it started: ${also.join(" ")}` : "") +
-    (dropped.length ? `; it gave up ${dropped.join(", ")}, which no session holds now` : "") +
-    kept.map((k) => `; left ${k.id} open, with what it started, for what it holds: ${k.holds.join(", ")} (close it by its own id to close it)`).join("")
+    (dropped.length ? `; it gave up ${dropped.join(", ")}, which no session holds now` : "")
   );
 }
 
@@ -4233,30 +4233,30 @@ export class Fleet extends EventEmitter {
    * Close: stop its process, then take it off the list. The transcript and
    * worktree stay, and a resume or a message brings it back. Reopening only
    * puts it back on the list; it stays stopped until you resume it.
-   * Closing takes the sessions it started, at any depth, off the list with
-   * it: they were calls in its run, and a parent gone from the board leaves
-   * them stranded at the root. Running ones are stopped first, the parent
-   * before its children — its death takes its MCP servers, and the pool
-   * agents they run, with it. A session it started that has work going (a
-   * wait armed, an open PR claimed: `workHeld`) is left open with what it started,
-   * and said in `kept`; closing it is asked by its own id, and what that
-   * one gives up is said in `dropped`.
+   * Closing takes the sessions it started, at any depth, with it, and stops
+   * every process any of them left behind: the jobs they started with
+   * `agentbox wait job` too, which a park or a stop leaves running. A parent
+   * gone from the board would leave them stranded at the root, still
+   * spending the machine for a result no one will read. Running ones are
+   * stopped first, the parent before its children — its death takes its MCP
+   * servers, and the pool agents they run, with it. `orphan` closes it alone
+   * and leaves what it started running, at the root. What a long-running
+   * service is for (a timer it installed) is its own unit, not a job, and
+   * closing leaves it alone. What any of them gives up (a PR claimed, a
+   * question unanswered) is said in `dropped`.
    */
-  async close(id: string, closed: boolean, alone = false): Promise<Closed> {
+  async close(id: string, closed: boolean, orphan = false): Promise<Closed> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (!closed) {
       updateSessionRecord(id, { archivedAt: null });
       await this.tick();
-      return { closed: [], kept: [], dropped: [], said: "" };
+      return { closed: [], dropped: [], said: "" };
     }
     const target = this.get(id);
     if (target.host === "subagent") throw this.callersAgent(target);
     const held = this.workHeld();
-    const kept: Closed["kept"] = [];
-    // `alone`: its successor has taken over what it started (`handOver`), and
-    // whatever is left under it must not be stopped for its sake.
-    const family = alone ? [id] : [id, ...this.openDescendants(id, held, kept)];
+    const family = orphan ? [id] : [id, ...this.openDescendants(id)];
     for (const sid of family) {
       let s: Session;
       try {
@@ -4275,6 +4275,9 @@ export class Fleet extends EventEmitter {
         }
       } else if (s.tmux) this.killTmux(s.tmux);
     }
+    // Its jobs: those of a session that has handed over to one still open
+    // (`heir`) are the successor's now, and stay.
+    for (const w of listOpenWaits(0)) if (!w.ended && w.spec.kind === "job" && family.includes(this.heir(w.sessionId))) stopJob(w.spec);
     // A parked one is stopped already; closing makes that yours, so it
     // reopens stopped rather than waiting on you.
     const at = this.now();
@@ -4284,8 +4287,8 @@ export class Fleet extends EventEmitter {
       dropAgentAws(sid);
     }
     await this.tick();
-    const dropped = held.get(id) ?? [];
-    return { closed: family, kept, dropped, said: closedWords(family.slice(1), kept, dropped) };
+    const dropped = family.flatMap((sid) => held.get(sid) ?? []);
+    return { closed: family, dropped, said: closedWords(family.slice(1), dropped) };
   }
 
   /** What each session has going that a stop must not drop unseen: its
@@ -4335,9 +4338,8 @@ export class Fleet extends EventEmitter {
     return at;
   }
 
-  /** The sessions `id` started, at any depth, still open: what closing it
-   *  takes with it. One holding work is put in `kept` instead, with all it started. */
-  private openDescendants(id: string, held: ReadonlyMap<string, string[]>, kept: Closed["kept"]): string[] {
+  /** The sessions `id` started, at any depth, still open: what closing it takes with it. */
+  private openDescendants(id: string): string[] {
     const kids = new Map<string, string[]>();
     for (const r of listSessionRecords(0)) {
       if (r.archivedAt || !r.parent || r.parent === r.id) continue;
@@ -4349,12 +4351,8 @@ export class Fleet extends EventEmitter {
       for (const c of kids.get(p) ?? []) {
         if (seen.has(c)) continue;
         seen.add(c);
-        const holds = held.get(c);
-        if (holds) kept.push({ id: c, holds });
-        else {
-          out.push(c);
-          walk(c);
-        }
+        out.push(c);
+        walk(c);
       }
     };
     walk(id);

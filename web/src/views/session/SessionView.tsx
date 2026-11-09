@@ -208,10 +208,10 @@ export function SessionView({
   const close = (s: SessionRow) => (runningDescendants(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
   // it, or the one above at the bottom of the list. On a phone, the list.
-  const closeRow = (s: SessionRow) => {
+  const closeRow = (s: SessionRow, orphan = false) => {
     const i = ordered.findIndex((x) => x.id === s.id);
     const next = i === -1 || narrow ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
-    closeNow(s.id, titleOf(s), descendantsOf(s, state.sessions).map((c) => c.id));
+    closeNow(s.id, titleOf(s), descendantsOf(s, state.sessions).map((c) => c.id), orphan);
     if (s.id !== id) return;
     if (next) onOpen(next.id);
     else go({ page: "sessions" });
@@ -380,13 +380,22 @@ export function SessionView({
       {closingParent ? (
         <Confirm
           title={`Close “${titleOf(closingParent)}”?`}
-          confirmLabel="Close"
+          confirmLabel="Close all"
           body={
             <p>
-              Closing takes it, and every session it started, off the board. <RunningFamily session={closingParent} sessions={state.sessions} />
-              The conversations are kept, and See closed finds them.
+              Closing stops it, every session it started and every job they run, and takes them off the board.{" "}
+              <RunningFamily session={closingParent} sessions={state.sessions} />
+              Orphan subagents closes this one alone and leaves the sessions it started running. The conversations are kept, and See
+              closed finds them.
             </p>
           }
+          other={{
+            label: "Orphan subagents",
+            onClick: () => {
+              closeRow(closingParent, true);
+              setClosingParent(null);
+            },
+          }}
           onCancel={() => setClosingParent(null)}
           onConfirm={() => {
             closeRow(closingParent);

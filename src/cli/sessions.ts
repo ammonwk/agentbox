@@ -447,14 +447,14 @@ const DONE = { close: "closed", reopen: "reopened", stop: "stopped", resume: "re
 
 /** Verbs that act on each id in turn, and say what happened to each. */
 export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume" | "adopt", args: string[]): Promise<number> {
-  const { rest } = parseArgs(args, []);
+  const { rest, flags } = parseArgs(args, [], verb === "close" ? ["orphan"] : []);
   const { ids } = await resolveIds(api, rest);
   if (ids.length === 0) throw new Error(`${verb} needs session ids (or - to read them from stdin)`);
   let failed = 0;
   for (const id of ids) {
     try {
       if (verb === "close" || verb === "reopen") {
-        const out = (await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" })) as Closed | null;
+        const out = (await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close", orphan: flags.has("orphan") })) as Closed | null;
         console.log(`${id}  ${DONE[verb]}${out?.said ?? ""}`);
       } else {
         await api("POST", `/api/sessions/${id}/${verb}`, {});

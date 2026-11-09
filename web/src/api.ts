@@ -296,7 +296,8 @@ export const api = {
   transcribe,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
-  close: (id: string, closed: boolean) => post<Closed>(`/api/sessions/${enc(id)}/close`, { closed }),
+  /** `orphan`: close it alone, and leave what it started running. */
+  close: (id: string, closed: boolean, orphan = false) => post<Closed>(`/api/sessions/${enc(id)}/close`, { closed, orphan }),
   /** A page of closed sessions, the most recently closed first, from all of
    *  history; only a project's, when one is selected. */
   closed: (q: string, offset: number, limit = 30, project: string | null = null) =>

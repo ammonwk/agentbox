@@ -30,18 +30,15 @@ export function useClosing(): { pending: ReadonlySet<string>; failure: typeof fa
   return { pending: p, failure: f, dismiss: () => set(pending, null) };
 }
 
-/** Hide it and the sessions it started now; the server stops and closes them behind the scenes. */
-export function closeNow(id: string, title: string, family: readonly string[] = []): void {
-  const ids = [id, ...family.filter((x) => x !== id)];
+/** Hide it and the sessions it started now; the server stops and closes them
+ *  behind the scenes. `orphan` closes it alone: what it started stays. */
+export function closeNow(id: string, title: string, family: readonly string[] = [], orphan = false): void {
+  const ids = orphan ? [id] : [id, ...family.filter((x) => x !== id)];
   set(new Set([...pending, ...ids]), failure && ids.includes(failure.id) ? null : failure);
-  api.close(id, true).then(
+  api.close(id, true, orphan).then(
     // Held a little past the answer: the state push that shows them closed can
-    // land just after, and the rows should not blink back in between. A
-    // session it started that holds work stays open, and is back on the list.
-    (out) => {
-      for (const k of out.kept) forget(k.id);
-      setTimeout(() => ids.forEach(forget), 5000);
-    },
+    // land just after, and the rows should not blink back in between.
+    () => setTimeout(() => ids.forEach(forget), 5000),
     (e: Error) => {
       ids.forEach(forget);
       set(pending, couldNot(id, title, "close", e.message));

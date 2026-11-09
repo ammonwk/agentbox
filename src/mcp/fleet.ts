@@ -217,11 +217,11 @@ export async function runMcp(base: string): Promise<void> {
     "close",
     {
       title: "Close or reopen a session",
-      description: "Close stops a finished session's process and takes it, and every session it started (at any depth), off the fleet; they stay resumable. Running ones are stopped, so ask before closing a session whose children are running. One it started that has a wait armed or has claimed an open PR is left open, and the answer names it. closed: false reopens it (back on the list, still stopped).",
-      inputSchema: { id: z.string(), closed: z.boolean().optional() },
+      description: "Close stops a finished session's process and takes it, and every session it started (at any depth), off the fleet, with every job any of them started; they stay resumable. Running ones are stopped, so ask before closing a session whose children are running. orphan: true closes it alone and leaves what it started running. closed: false reopens it (back on the list, still stopped).",
+      inputSchema: { id: z.string(), closed: z.boolean().optional(), orphan: z.boolean().optional() },
     },
-    async ({ id, closed }) => {
-      const out = (await api("POST", `/api/sessions/${id}/close`, { closed: closed ?? true })) as Closed | null;
+    async ({ id, closed, orphan }) => {
+      const out = (await api("POST", `/api/sessions/${id}/close`, { closed: closed ?? true, orphan: orphan === true })) as Closed | null;
       return text(`${closed === false ? "reopened" : "closed"} ${id}${out?.said ?? ""}`);
     },
   );
