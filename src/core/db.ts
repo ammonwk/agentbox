@@ -801,13 +801,18 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
 /** Reconcile discovery that ran before a managed pane became visible: the
  * pending row takes the identity, the discovered row becomes a closed alias
  * of it. The caller must prove the provider identity from the live process in
- * that pane. One transaction, so a crash leaves one of the two, not both. */
+ * that pane, on the pending row's account. The discovered row's account is
+ * not compared: where every account reads one store (omp, opencode),
+ * discovery files each transcript under the first account, so it differs from
+ * the pending row's whenever the spawn went elsewhere (b2aqsdct, 11-09, whose
+ * timeline never left "Starting omp…"). One transaction, so a crash leaves
+ * one of the two, not both. */
 export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, now: number): boolean {
   const pending = getSessionRecord(pendingId), discovered = getSessionRecord(discoveredId);
   if (!pending || !discovered || pending.agentSessionId || pending.origin !== "agentbox" || !pending.tmux || pending.archivedAt || pending.successor ||
       discovered.origin !== "external" || !discovered.agentSessionId || discovered.tmux || discovered.archivedAt || discovered.successor ||
       discovered.label || discovered.launch || discovered.worktree || discovered.parentByHand || discovered.hoppedAt ||
-      discovered.provider !== pending.provider || discovered.accountId !== pending.accountId || discovered.createdAt < pending.createdAt ||
+      discovered.provider !== pending.provider || discovered.createdAt < pending.createdAt ||
       discovered.startedAt < pending.createdAt - 10_000) return false;
   try {
     getDb().transaction(() => {
