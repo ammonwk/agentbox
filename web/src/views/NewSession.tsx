@@ -16,7 +16,6 @@ import {
   noteRepoChoice,
   parseWorktreeRef,
   promptPrs,
-  promptProjects,
   prsOf,
   rankModels,
   recentFolders,
@@ -95,7 +94,6 @@ export function NewSession({
   const [wtText, setWtText] = useState("");
   const [path, setPath] = useState(prefs.path ?? "");
   const [prompt, setPrompt] = useState(prefs.draft ?? "");
-  const [wherePicked, setWherePicked] = useState(prefs.wherePicked ?? false);
   // Closed sessions' too, which the board does not carry: from the server.
   const [history, setHistory] = useState<PromptHistoryEntry[]>([]);
   useEffect(() => {
@@ -294,11 +292,6 @@ export function NewSession({
   // names wins: the effect above puts the session on it. Every pick is
   // remembered, so the list sorts by most recently chosen next time.
   function pickRepo(id: string) {
-    setWherePicked(true);
-    selectRepo(id);
-  }
-
-  function selectRepo(id: string) {
     setWhere("repo");
     noteRepoChoice(id);
     setRepoChoices((c) => ({ ...c, [id]: Date.now() }));
@@ -316,7 +309,6 @@ export function NewSession({
   // starts there (submit), so a guess that went nowhere is not kept.
   const [folderChoices, setFolderChoices] = useState<Record<string, number>>(loadFolderChoices);
   function pickFolder(p: string) {
-    setWherePicked(true);
     setWhere("path");
     setPath(p);
   }
@@ -355,7 +347,6 @@ export function NewSession({
 
   async function addOther(value: string) {
     if (!value || otherBusy) return;
-    setWherePicked(true);
     setOtherBusy(true);
     setOtherErr(null);
     try {
@@ -385,8 +376,8 @@ export function NewSession({
   const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, wherePicked, draft: prompt, draftImages }, project);
-  }, [provider, where, repoId, worktree, wtFromPrompt, path, perProvider, wherePicked, prompt, draftImagesKey]);
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, draft: prompt, draftImages }, project);
+  }, [provider, where, repoId, worktree, wtFromPrompt, path, perProvider, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -399,23 +390,6 @@ export function NewSession({
     () => recentFolders(folderChoices, knownRepos.map((r) => r.ref), 12),
     [folderChoices, knownRepos],
   );
-
-  const projectMatches = useMemo(
-    () => promptProjects(prompt, knownRepos, recentFolders(folderChoices, knownRepos.map((r) => r.ref), Infinity)),
-    [prompt, knownRepos, folderChoices],
-  );
-  const promptProject = projectMatches.length === 1 ? projectMatches[0] : null;
-  useEffect(() => {
-    if (wherePicked || !promptProject) return;
-    if (promptProject.kind === "repo") selectRepo(promptProject.repo.id);
-    else {
-      setWhere("path");
-      setPath(promptProject.path);
-    }
-  }, [promptProject?.key, wherePicked]);
-  useEffect(() => {
-    if (!prompt.trim()) setWherePicked(false);
-  }, [prompt]);
 
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
@@ -537,14 +511,6 @@ export function NewSession({
           ) : null}
           <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} why={whyNot} />
         </div>
-
-        {!wherePicked && projectMatches.length > 0 ? (
-          <p className="ns-project-hint" role="status">
-            {promptProject
-              ? "Project picked from your prompt"
-              : "Your prompt names several projects. Pick one in Where."}
-          </p>
-        ) : null}
 
         <PromptBox
           id="ns-prompt"

@@ -16,8 +16,6 @@ export interface NewSessionPrefs {
   provider?: ProviderId;
   where?: "repo" | "path";
   repoId?: string;
-  /** A manual Where choice holds while the saved draft is edited. */
-  wherePicked?: boolean;
   worktree?: boolean;
   path?: string;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
@@ -34,8 +32,7 @@ const PREFS_KEY = "agentbox.newSession";
 const prefsKey = (project: string | null) => (project ? `${PREFS_KEY}.project.${project}` : PREFS_KEY);
 
 /** A project's dialog starts in that project's repo, with the provider and
- *  per-provider choices All projects has, until a Where is picked by hand or
- *  a draft is left. */
+ *  per-provider choices All projects has, unless a draft is left. */
 export function loadPrefs(project: string | null = null): NewSessionPrefs {
   try {
     const raw = localStorage.getItem(prefsKey(project));
@@ -45,7 +42,7 @@ export function loadPrefs(project: string | null = null): NewSessionPrefs {
     }
     const v = JSON.parse(raw ?? "{}") as unknown;
     const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};
-    if (project && !prefs.wherePicked && !prefs.draft?.trim() && !prefs.draftImages?.length) {
+    if (project && !prefs.draft?.trim() && !prefs.draftImages?.length) {
       return { ...prefs, where: "repo", repoId: project };
     }
     return prefs;
@@ -342,51 +339,6 @@ export function reposByChoice(repos: readonly Repo[], choices: Record<string, nu
 }
 
 // ------------------------------------------------------------------ where
-
-export type PromptProject =
-  | { key: string; kind: "repo"; repo: Repo }
-  | { key: string; kind: "path"; path: string };
-
-/** Whole project names only, and none that sits inside another project's
- *  name: with plaibook-platform known, "plaibook" chooses nothing. */
-export function promptProjects(text: string, repos: readonly Repo[], folders: readonly string[]): PromptProject[] {
-  const targets: { project: PromptProject; names: string[] }[] = repos.map((repo) => ({
-    project: { key: `repo:${repo.id}`, kind: "repo", repo },
-    names: [repo.displayName, repo.ref, repo.fullName ?? "", repo.fullName?.split("/").pop() ?? "", ...projectFolderNames(repo.ref)],
-  }));
-  for (const path of new Set(folders)) {
-    if (repos.some((r) => r.ref === path)) continue;
-    targets.push({ project: { key: `path:${path}`, kind: "path", path }, names: [path, path.replace(/\/+$/, "").split("/").pop() ?? ""] });
-  }
-  const bare = (names: string[]) => names.filter((n) => n && !n.includes("/")).map((n) => n.toLowerCase());
-  const matches: { project: PromptProject; start: number; end: number; priority: number }[] = [];
-  for (const { project, names } of targets) {
-    const others = targets.filter((t) => t.project.key !== project.key).flatMap((t) => bare(t.names));
-    for (const name of new Set(names.filter(Boolean))) {
-      const lower = name.toLowerCase();
-      if (!name.includes("/") && others.some((o) => o !== lower && o.includes(lower))) continue;
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const pattern = new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`, "giu");
-      const priority = project.kind === "repo"
-        ? [project.repo.displayName, project.repo.ref, project.repo.ref.split("/").pop()].includes(name) ? 2 : 1
-        : 0;
-      for (const m of text.matchAll(pattern)) matches.push({ project, start: m.index, end: m.index + m[0].length, priority });
-    }
-  }
-  // A full path or owner/repo is more specific than a name inside it.
-  const specific = matches.filter((m) => !matches.some((other) =>
-    other.start <= m.start && other.end >= m.end &&
-    (other.end - other.start > m.end - m.start || other.priority > m.priority),
-  ));
-  return [...new Map(specific.map((m) => [m.project.key, m.project])).values()];
-}
-
-function projectFolderNames(path: string): string[] {
-  const parts = path.replace(/\/+$/, "").split("/");
-  const name = parts.pop() ?? "";
-  const parent = parts.pop();
-  return parent && name.toLowerCase() === `${parent.toLowerCase()}-dev` ? [name, parent] : [name];
-}
 
 /** Repos with the most recently active session first; never-used ones keep
  *  their registration order at the end. */
