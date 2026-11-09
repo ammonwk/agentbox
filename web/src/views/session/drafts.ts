@@ -188,13 +188,30 @@ export async function forgetPending(sessionId: string, id: string): Promise<void
   });
 }
 
-/** Restoring a known failure is an explicit edit, saved with the removal of
- *  the pending copy in one transaction. A newer draft is never replaced. */
+/** The same message as a new submission, in the old one's place. */
+export async function retryPending(sessionId: string, id: string): Promise<PendingSend | null> {
+  let next: PendingSend | null = null;
+  await mutate(() => {
+    const all = readAll();
+    const w = all[sessionId];
+    const i = w?.pending?.findIndex((p) => p.id === id) ?? -1;
+    if (!w?.pending || i < 0) return;
+    next = { ...w.pending[i]!, id: newRevision(), at: Date.now(), state: "pending", error: null };
+    w.pending[i] = next;
+    w.attempts = [...(w.attempts ?? []), { id: next.id, bodyHash: next.bodyHash }];
+    write(all);
+  });
+  return next;
+}
+
+/** Taking one that waits on you back into the box is an explicit edit, saved
+ *  with the removal of the pending copy in one transaction. A newer draft is
+ *  never replaced. */
 export async function restorePending(sessionId: string, id: string, draft: Draft, previousRevision: string, unchanged: () => boolean): Promise<void> {
   await mutate(() => {
     const all = readAll();
     const w = all[sessionId];
-    if (!w?.pending?.some((p) => p.id === id && p.state === "failed")) throw new Error("this submission is no longer a known failure");
+    if (!w?.pending?.some((p) => p.id === id && (p.state === "failed" || p.state === "unconfirmed"))) throw new Error("this message is no longer waiting on you");
     if (!unchanged() || (w.draft && w.draft.revision !== previousRevision)) throw new Error("the draft changed; try restoring again");
     w.draft = draft;
     w.pending = w.pending.filter((p) => p.id !== id);

@@ -1290,6 +1290,28 @@ button.rail-state:hover {
 .tl-queued {
   opacity: 0.6;
 }
+/* Sent from here and not received: it waits on you, under its note. */
+.tl-unsent .tl-bubble {
+  opacity: 0.75;
+}
+.tl-unsent .tl-me-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+}
+.tl-unsent .tl-me-foot .linkish,
+.cmp-unsent .linkish {
+  flex: none;
+  color: var(--muted);
+  text-decoration: none;
+}
+.tl-unsent .tl-me-foot .linkish:hover,
+.cmp-unsent .linkish:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 /* Only a card has a border to dash; on a bubble this drew a 3px box. */
 .tl-user.tl-queued {
   border-style: dashed;
@@ -2691,11 +2713,8 @@ a.wk-item:hover {
   font-size: 12.5px;
   color: var(--danger);
 }
-.cmp-pending { display: grid; gap: 6px; }
-.cmp-pending-body { flex: 1; min-width: 0; }
-.cmp-pending-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
-.cmp-pending .cmp-note { flex-wrap: wrap; }
-.cmp-pending .cmp-note > .btn { margin-left: 0; }
+/* A message that waits on you, while no timeline is on screen to show it. */
+.cmp-unsent-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-note {
   display: flex;
   align-items: center;

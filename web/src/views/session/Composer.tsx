@@ -10,7 +10,7 @@ import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
 import { useRecall } from "./recall";
 import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type Draft, type PendingSend } from "./drafts";
-import { PendingSends, deliverPending } from "./submissions";
+import { PendingActions, deliverPending, onEditPending, pendingNote, stuck, useDelivery, usePendingSends, usePendingShown } from "./submissions";
 import { dropEcho } from "./echo";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -121,6 +121,24 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   /** This render's `stop`, for a send that ends after the render that began it. */
   const latestStop = useRef(stop);
   latestStop.current = stop;
+
+  useDelivery(session.id);
+  const pending = usePendingSends(session.id);
+  const timelineShown = usePendingShown(session.id);
+  /** Edit on a message that waits on you: back into the box, after what is there. */
+  const edit = (p: PendingSend) => run(async () => {
+    const previousRevision = revision.current;
+    const restoredRevision = newRevision();
+    const back = merged(p.draft);
+    await restorePending(session.id, p.id, { text: back.text, images: [...images.saved(), ...back.images], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+    images.restore(back.images);
+    revision.current = restoredRevision;
+    setTextState(back.text);
+    ref.current?.focus();
+  });
+  const latestEdit = useRef(edit);
+  latestEdit.current = edit;
+  useEffect(() => onEditPending(session.id, (p) => void latestEdit.current(p)), [session.id]);
   // Esc from anywhere on the page that is not a field, the terminal (which
   // sends its own) or a dialog.
   useEffect(() => {
@@ -244,15 +262,15 @@ export function Composer({ session, accounts, skills, textareaRef }: {
 
   return (
     <div className="cmp" data-mode={mode.kind}>
-      <PendingSends sessionId={session.id} onRestore={async (p) => {
-        const previousRevision = revision.current;
-        const restoredRevision = newRevision();
-        const back = merged(p.draft);
-        await restorePending(session.id, p.id, { text: back.text, images: [...images.saved(), ...back.images], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
-        images.restore(back.images);
-        revision.current = restoredRevision;
-        setTextState(back.text);
-      }} />
+      {/* The timeline shows these as bubbles; the terminal, here. */}
+      {timelineShown ? null : pending.filter(stuck).map((p) => (
+        <div className="cmp-note cmp-unsent" key={p.id} title={pendingNote(p).title}>
+          <Icon.alert size={14} />
+          <strong>{pendingNote(p).note}</strong>
+          <span className="cmp-unsent-text">{p.draft.text || "Resume session"}</span>
+          <PendingActions p={p} />
+        </div>
+      ))}
       {error ? (
         <div className="cmp-error" role="alert">
           <Icon.alert size={13} /> {spoke ? "Not heard" : btw ? "Not asked" : "Not sent"}: {error}

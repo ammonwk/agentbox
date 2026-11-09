@@ -80,6 +80,9 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/** The request got no answer: agentbox is down, restarting, or out of reach. */
+export class Unreachable extends Error {}
+
 export async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
@@ -97,7 +100,7 @@ export async function request<T>(method: Method, path: string, body?: unknown, s
     res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
   } catch (err) {
     // A dead server is the common case for a local tool; say which call died.
-    throw new Error(`${path}: cannot reach agentbox (${(err as Error).message})`);
+    throw new Unreachable(`${path}: cannot reach agentbox (${(err as Error).message})`);
   }
 
   const text = await res.text();

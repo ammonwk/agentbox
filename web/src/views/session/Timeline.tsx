@@ -11,6 +11,7 @@ import { Markdown } from "./Markdown";
 import { AskRow, QuestionCard } from "./Question";
 import { anchoredScrollTop, distanceFromBottom, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
+import { PendingActions, pendingNote, stuck, usePendingSends, useShowsPending } from "./submissions";
 import { MessageRail, useTurns } from "./MessageRail";
 import { onJump, takeJump } from "./jump";
 import { FindBar, useMarks } from "./Find";
@@ -162,6 +163,11 @@ export function Timeline({ session }: { session: Session }) {
   const queued = viewing || !atEnd ? NO_QUEUED : session.queued;
   const sending = useEchoes(session.id, events, queued);
   const echoes = viewing || !atEnd ? NO_ECHOES : sending;
+  useShowsPending(session.id);
+  // Sent from here and not yet received: a side question shows only once it
+  // waits on you, since its answer has a card of its own.
+  const allPending = usePendingSends(session.id);
+  const pending = useMemo(() => (viewing || !atEnd ? [] : allPending.filter((p) => p.kind !== "btw" || stuck(p))), [allPending, viewing, atEnd]);
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
   // the next step is written). The terminal shows the same state.
@@ -207,7 +213,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned, echoes.length, queued.length, btw, thinking]);
+  }, [events, pinned, echoes.length, pending.length, queued.length, btw, thinking]);
 
   // A question came up while you were at the tail (or the session opened on
   // one): show it from its top, which a card taller than the view would
@@ -611,11 +617,24 @@ export function Timeline({ session }: { session: Session }) {
           {queued.map((q, i) => (
             <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
           ))}
-          {echoes.map((e) => (
-            <Bubble key={e.id} at={e.at} className="tl-echo" note="Sending…" title="The agent has not recorded it yet" copy={e.text}>
-              <Markdown text={e.text} />
-            </Bubble>
-          ))}
+          {[
+            ...echoes.map((e) => ({ at: e.at, el: (
+              <Bubble key={e.id} at={e.at} className="tl-echo" note="Sending…" title="The agent has not recorded it yet" copy={e.text}>
+                <Markdown text={e.text} />
+              </Bubble>
+            ) })),
+            ...pending.map((p) => {
+              const text = p.draft.text || "Resume session";
+              const { note, title } = pendingNote(p);
+              // What went wrong reads first, then what to do about it.
+              const actions = stuck(p) ? <><span className="tl-me-note">{note}</span><PendingActions p={p} /></> : null;
+              return { at: p.at, el: (
+                <Bubble key={p.id} at={p.at} className={stuck(p) ? "tl-unsent" : "tl-echo"} note={actions ? undefined : note} title={title} copy={text} actions={actions}>
+                  <Markdown text={text} />
+                </Bubble>
+              ) };
+            }),
+          ].sort((a, b) => a.at - b.at).map((x) => x.el)}
           {thinking && session.background ? <ThinkingLive since={liveSince} now={now} background /> : null}
         </div>
         {!atEnd ? (
@@ -1006,7 +1025,7 @@ function Bubble({ id, at, className, note, title, copy, actions, children }: { i
       <div className="tl-me-foot">
         <CopyIcon text={copy} />
         {actions}
-        {note ? <span>{note}</span> : null}
+        {note ? <span className="tl-me-note">{note}</span> : null}
         <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
       </div>
     </div>
