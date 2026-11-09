@@ -107,7 +107,10 @@ export function moveCards(from: string, to: string): number {
  *  comes back to them, so they are not finished (`Fleet.workHeld`). */
 export function openAsks(): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  const rows = getDb().query(`SELECT id, session_id FROM cards WHERE kind = 'decision' AND state IN ('open','later') AND session_id IS NOT NULL`).all() as { id: number; session_id: string }[];
+  // An answer still in its undo window, not yet typed in, holds its session too: 11-09 the idle closer shut x4spn85d in
+  // the seconds after Ammon answered card 1037 with an MFA code, and the answer, good for 30s, went nowhere.
+  const rows = getDb().query(`SELECT id, session_id FROM cards WHERE kind = 'decision' AND session_id IS NOT NULL AND (state IN ('open','later')
+    OR (state = 'answered' AND typed_at IS NULL AND delivered_at IS NULL AND answered_at > ?))`).all(Date.now() - 3_600_000) as { id: number; session_id: string }[];
   for (const r of rows) out.set(r.session_id, [...(out.get(r.session_id) ?? []), `card ${r.id}`]);
   return out;
 }
