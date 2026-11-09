@@ -452,6 +452,9 @@ const REFUSED = new Set([401, 402, 403, 429]);
 const placedCallers = new Map<string, { account: string; at: number }>();
 
 async function placeCaller(conversation: string | null, model: string | null, log: (line: string) => void): Promise<string | null> {
+  // Unnamed, the placement would be for omp's default, which another service
+  // may sell: only a Go model is a Go account's to place.
+  if (!model) return null;
   const now = Date.now();
   const hit = placedCallers.get(conversation ?? "");
   if (hit && (conversation || now - hit.at < 60_000)) {
@@ -462,7 +465,7 @@ async function placeCaller(conversation: string | null, model: string | null, lo
   const placement = await fetch(`${serverBase()}/api/placement`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-agentbox": "1" },
-    body: JSON.stringify({ provider: "omp", model: model && `opencode-go/${model}` }),
+    body: JSON.stringify({ provider: "omp", model: `opencode-go/${model}` }),
     signal: AbortSignal.timeout(5_000),
   })
     .then((r) => r.json() as Promise<{ data?: { accountId?: string | null; mode?: string; why?: string } | null }>)

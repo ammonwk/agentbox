@@ -380,7 +380,7 @@ function accountViews(): AccountView[] {
 function buildAccountViews(): AccountView[] {
   const homes = accounts.list();
   const owner = owners(homes);
-  const { claims, placements } = fleet.accountsBoard(homes.map((a) => a.provider));
+  const { claims, candidates } = fleet.accountsBoard(homes.map((a) => a.provider));
   return homes.filter((a) => owner.get(a.id) === a.id).map((a) => {
     const scopes = fleet.scopesOf(a.id);
     return {
@@ -390,7 +390,7 @@ function buildAccountViews(): AccountView[] {
       // Lapsed claims weigh nothing; listing every session of the last few
       // days under its account would bury the handful that do.
       claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
-      placement: placements.get(`${a.provider}/${scopes[0] ?? "personal"}`)?.candidates.find((c) => c.accountId === a.id) ?? null,
+      placement: candidates.get(`${a.id}/${scopes[0] ?? "personal"}`) ?? null,
       alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
     };
   });
@@ -1579,7 +1579,12 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/accounts", async ({ req }) => {
     const b = await readBody(req);
-    const out = await accounts.create(accountProvider(b.provider), optionalString(b, "label"));
+    const p = accountProvider(b.provider);
+    // A service sold on a key (accounts/services.ts) takes the key here; any
+    // other account starts its login.
+    const out = typeof b.apiKey === "string"
+      ? { account: await accounts.createWithKey(p, requireString(b, "service"), b.apiKey, optionalString(b, "label")), login: null }
+      : await accounts.create(p, optionalString(b, "label"));
     scheduleCold();
     return json(out, 201);
   })
@@ -1591,6 +1596,7 @@ const router = new Router(mapError)
   })
   .add("PATCH", "/api/accounts/:id", async ({ req, params }) => {
     const b = await readBody(req);
+    if (typeof b.apiKey === "string") await accounts.setKey(params.id!, b.apiKey);
     const a = accounts.update(params.id!, {
       label: optionalString(b, "label"),
       enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,

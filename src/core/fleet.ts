@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { owners, sameLogin } from "./accounts/homes";
+import { accountServes, serviceOf, serviceOfModel, SERVICES } from "./accounts/services";
 import { elsewhere, place, type AccountState } from "./balancer";
 import { claimFor, listedClaim } from "./claim";
 import { claimsByAccount, type ClaimInput } from "./claims";
@@ -2893,7 +2894,8 @@ export class Fleet extends EventEmitter {
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
     const hits = rateLimitHitsSince(this.now() - STOP_LOOKBACK_MS);
-    const mine = all.filter((a) => owner.get(a.id) === a.id);
+    // Only the accounts whose service sells the model, to this CLI.
+    const mine = all.filter((a) => owner.get(a.id) === a.id && accountServes(a, provider, model));
     // What the sessions already on this model were last told, by account.
     const refused = refusedRoutes(
       model ? this.routeOutcomes(provider) : [],
@@ -2905,6 +2907,7 @@ export class Fleet extends EventEmitter {
       .map((a) => {
         const usage = this.deps.usage.usageOf(a.id);
         const windows = usage?.windows ?? [];
+        const svc = serviceOf(a);
         return {
           account: a,
           windows,
@@ -2917,12 +2920,16 @@ export class Fleet extends EventEmitter {
           // refused login is a stop of its own, no session needing to die on it.
           stopped: stoppedSince(
             [
-              ...hits.filter((h) => h.accountId === a.id && !isFree(h.detail.split(": ")[0])),
+              // A hit names its model first ("morph/morph-kimik31: 429 …"): one
+              // on a model another service sells (a session switched to it, on
+              // that service's key) is no stop of this account's.
+              ...hits.filter((h) => h.accountId === a.id && !isFree(h.detail.split(": ")[0]) && accountServes(a, provider, h.detail.split(": ")[0])),
               ...(usage?.refusedAt ? [{ at: usage.refusedAt, detail: usage.stale ?? "its login was refused" }] : []),
             ],
             this.now(),
             usage ?? undefined,
             model,
+            svc?.limitHoldMs,
           ),
           refused: refused.get(a.id) ?? null,
         };
@@ -2944,28 +2951,36 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  /** What the Accounts page shows: the claims on each account, and where a
-   *  session of each provider would go now in each scope (`provider/scope`)
-   *  — the claims worked out once for all of them, not once per provider. A
+  /** What the Accounts page shows: the claims on each account, and how the
+   *  balancer sees each one for a new session in each scope (keyed
+   *  `account/scope`) — the claims worked out once for all of them, not once
+   *  per provider. An account on a service is seen for a session on its
+   *  service's default model, since the CLI's default may be another's. A
    *  provider that cannot place is left out. */
-  accountsBoard(providers: readonly ProviderId[]): { claims: Map<string, ClaimView[]>; placements: Map<string, Placement> } {
+  accountsBoard(providers: readonly ProviderId[]): { claims: Map<string, ClaimView[]>; candidates: Map<string, Candidate> } {
     const claims = this.claims();
-    const placements = new Map<string, Placement>();
+    const candidates = new Map<string, Candidate>();
     this.claimsNow = claims;
     try {
       for (const p of new Set(providers)) {
+        const adapter = this.adapter(p);
+        const models = new Set([undefined, ...SERVICES.filter((s) => s.harnesses.includes(p)).map((s) => adapter.defaultModelOn?.(s.id) ?? undefined)]);
         for (const scope of readOrg() ? (["personal", "org"] as const) : (["personal"] as const)) {
-          try {
-            placements.set(`${p}/${scope}`, this.placement(p, undefined, undefined, undefined, true, scope));
-          } catch {
-            // Shown without one.
+          for (const model of models) {
+            try {
+              for (const c of this.placement(p, model, undefined, undefined, true, scope).candidates) {
+                if (!candidates.has(`${c.accountId}/${scope}`)) candidates.set(`${c.accountId}/${scope}`, c);
+              }
+            } catch {
+              // Shown without one.
+            }
           }
         }
       }
     } finally {
       this.claimsNow = null;
     }
-    return { claims, placements };
+    return { claims, candidates };
   }
 
   /** Set only inside `accountsBoard`, which places every provider in one go. */
@@ -2983,19 +2998,26 @@ export class Fleet extends EventEmitter {
 
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, scope: Scope = getSettings().scope): Placement {
     const adapter = this.adapter(provider);
-    const asked = model || getSettings().models[provider] || null;
-    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null).filter((a) => this.scopesOf(a.account.id).includes(scope));
-    // Naming another home of a login means the login's account.
     const named = accountId && accountId !== "auto" ? getAccount(accountId) : null;
+    let asked = model || getSettings().models[provider] || null;
+    // Pinned, unasked, to an account whose service does not sell the default:
+    // it runs on that service's own default instead.
+    const svc = named ? serviceOf(named) : null;
+    const fallback = !asked && named && svc && !accountServes(named, provider, adapter.defaultModel?.() ?? null) ? adapter.defaultModelOn?.(svc.id) ?? null : null;
+    if (fallback) asked = fallback;
+    const runs = asked ?? adapter.defaultModel?.() ?? null;
+    const states = this.accountStates(provider, runs).filter((a) => this.scopesOf(a.account.id).includes(scope));
+    // Naming another home of a login means the login's account.
     const home = named && states.find((a) => a.account.id === named.id || sameLogin(getAccount(a.account.id)!, named));
-    return place({
+    const placed = place({
       provider,
       model: asked,
       effort: effort ?? null,
       claim: this.claimOf(provider, asked, effort ?? null, first),
-      // A free model, or one the devin bridge serves, draws on nothing of
-      // the account's: its plan being walled does not stand in the way.
-      unmetered: isFree(asked) || (provider === "devin" && bridgedModel(asked) !== null),
+      // A free model, one the devin bridge serves, or one sold by a service
+      // with no plan to meter draws on nothing of the account's: its plan
+      // being walled does not stand in the way.
+      unmetered: isFree(asked) || (provider === "devin" && bridgedModel(asked) !== null) || serviceOfModel(runs)?.metered === false,
       accountId: home ? home.account.id : accountId && accountId !== "auto" ? accountId : null,
       // One started without a model runs on the CLI's own default: that is
       // the route whose refusals count against it.
@@ -3004,6 +3026,13 @@ export class Fleet extends EventEmitter {
       settings: getSettings().balancer,
       now: this.now(),
     });
+    if (named && !home && svc && !accountServes(named, provider, runs)) {
+      const sold = serviceOfModel(runs);
+      placed.why = svc.harnesses.includes(provider)
+        ? `${named.label} is on ${svc.label}, which does not sell ${runs}${sold ? ` (${sold.label} does)` : ""}`
+        : `${named.label} is on ${svc.label}, which ${adapter.label} sessions cannot use`;
+    }
+    return fallback ? { ...placed, model: fallback } : placed;
   }
 
   // --------------------------------------------------------------- actions
@@ -3085,7 +3114,9 @@ export class Fleet extends EventEmitter {
       throw new FleetError(400, (e as Error).message);
     }
 
-    const model = unretired(req.model || settings.models[req.provider] || undefined);
+    // Unasked on an account whose service does not sell the CLI's default,
+    // the placement named that service's own.
+    const model = unretired(req.model || settings.models[req.provider] || placement.model || undefined);
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
     const text = sessionText(id, briefing(cwd), adapter.promptDelivery === "file" ? req.prompt || undefined : undefined);
@@ -3443,28 +3474,51 @@ export class Fleet extends EventEmitter {
       // A retired model runs as its replacement, as it would at spawn.
       model = unretired(model);
       const at = this.now();
+      // A model another service sells is that service's account's to run: the
+      // switch moves the session there (its cache is lost to the switch anyway).
+      const current = this.accountFor(rec, view);
+      const moveTo = current && !accountServes(current, rec.provider, model) ? this.placement(rec.provider, model, null, rec.effort ?? null, false, rec.scope) : null;
+      if (moveTo && !moveTo.accountId) throw new FleetError(409, moveTo.why);
+      const account = moveTo ? getAccount(moveTo.accountId!) : current;
+      const moved = moveTo && account ? { accountId: account.id } : {};
+      const noteMove = () => {
+        if (!moveTo || !account || !current) return;
+        insertAssignment({
+          id: randomUUID(),
+          sessionId: rec.id,
+          at,
+          provider: rec.provider,
+          accountId: account.id,
+          mode: moveTo.mode,
+          claim: moveTo.claim,
+          candidates: moveTo.candidates,
+          settings: getSettings().balancer,
+          why: `moved from ${current.label} to run ${model}: ${moveTo.why}`,
+        });
+      };
       // The pane, not the last pass, says whether it still runs: a stop taken
       // mid-pass leaves the view on "tmux" for a tick, and restarting from
       // that would stop a process already gone and resume an id it never wrote.
       if (!rec.tmux || !(await this.paneAlive(rec.tmux))) {
-        updateSessionRecord(id, { model, modelAt: at });
+        noteMove();
+        updateSessionRecord(id, { model, modelAt: at, ...moved });
         await this.tick();
         return this.get(id);
       }
       // A CLI that picks its own session id (codex, omp, devin, muse) has none
       // until its first transcript is written, so there is nothing to resume it on.
       if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
-      const account = this.accountFor(rec, view);
       if (!account) throw new FleetError(409, "this session's account is no longer set up");
       const cwd = this.resumeDir(rec);
       // An adopted launch's carried --model would otherwise win over the switch.
       const launch = rec.launch ? { ...rec.launch, args: withoutModelFlag(rec.launch.args) } : null;
-      const next = { ...rec, model, modelAt: at, launch };
+      const next = { ...rec, model, modelAt: at, launch, ...moved };
       // Build the resume before stopping anything: a launch that cannot be
       // built leaves the session running as it was.
       const prepared = this.resumeLaunch(next, account, cwd);
       await this.stopAndWait(rec, view);
-      updateSessionRecord(id, { model, modelAt: at, ...(launch ? { launch } : {}) });
+      noteMove();
+      updateSessionRecord(id, { model, modelAt: at, ...(launch ? { launch } : {}), ...moved });
       this.startTmux(next, account, cwd, undefined, prepared);
       await this.tick();
       return this.get(id);

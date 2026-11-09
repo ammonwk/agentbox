@@ -15,12 +15,16 @@ import type { UserIdentity } from "./user";
 export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse";
 
 /** The providers that hold accounts. opencode holds none of its own: it runs
- *  on OpenCode Go, which omp's accounts are sign-ins to and report usage
+ *  on OpenCode Go, which omp's Go accounts are sign-ins to and report usage
  *  for, so its sessions sit on those accounts and share their balancer
- *  (`accountProvider` in providers/index.ts). */
+ *  (`accountProvider` and `SERVICES` in providers/account.ts). */
 export type AccountProvider = Exclude<ProviderId, "opencode">;
 
 // --------------------------------------------------------------- accounts
+
+/** A service that sells models, which an omp account is a login to
+ *  (src/core/accounts/services.ts). */
+export type ServiceId = "opencode-go" | "morph";
 
 /**
  * One login on one provider. The credential home is what isolates it: the
@@ -158,6 +162,9 @@ export interface AccountAuth {
 export interface AccountView extends Account {
   auth: AccountAuth;
   usage: AccountUsage;
+  /** The service it is a login to (`SERVICES`, providers/account.ts); null
+   *  for a CLI's own login. */
+  service: ServiceId | null;
   /** Active sessions on this account (in any of its homes) and what they
    *  still claim. */
   claims: ClaimView[];
@@ -289,6 +296,9 @@ export interface Placement {
   candidates: Candidate[];
   /** One sentence: why this account. */
   why: string;
+  /** The model it runs on when none was asked and the CLI's default is not
+   *  sold on the account you picked: that account's service's own. */
+  model?: string;
 }
 
 export interface CalibrationReport {

@@ -1,7 +1,8 @@
 /** Usage-window math for the Accounts page, the session header and the
  *  placement preview. Pure: `now` is always passed in. */
 
-import type { AccountUsage, ClaimView, UsageWindow } from "../../../src/core/types";
+import type { AccountUsage, AccountView, ClaimView, UsageWindow } from "../../../src/core/types";
+import { service } from "../../../src/core/providers/account";
 import { clamp, fmtCountdown, fmtPts } from "./format";
 
 export type Tone = "ok" | "warn" | "bad";
@@ -106,4 +107,16 @@ export function headlineWindows(usage: AccountUsage): { short: UsageWindow | nul
   const short = usage.windows.find((w) => w.kind === "short" && !w.scope) ?? null;
   const weekly = usage.windows.find((w) => w.kind === "weekly" && !w.scope) ?? null;
   return { short, weekly };
+}
+
+/** What a service with no windows to report says of its limits, for an
+ *  account that has none: "no limit" in place of the bars, this as its why. */
+export function noLimitOf(a: Pick<AccountView, "service" | "usage">): string | null {
+  return a.usage.windows.length === 0 ? service(a.service)?.limits ?? null : null;
+}
+
+/** "Morph", "OpenCode Go · Acme", or the CLI's own plan, without repeating
+ *  the label it sits beside. */
+export function planOf(a: Pick<AccountView, "plan" | "label">): string | null {
+  return a.plan && a.plan !== a.label ? a.plan : null;
 }

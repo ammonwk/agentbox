@@ -42,8 +42,9 @@ import {
   type OmpState,
   type ToolOutcome,
 } from "./omp-transcript";
-import { ompContextLimit } from "./omp-models";
+import { ompContextLimit, ompModelsConfig } from "./omp-models";
 import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
+import { readApiKey, service, serviceOf, serviceOfModel, SERVICES } from "../accounts/services";
 import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
 import { getSessionRecord } from "../db";
@@ -822,15 +823,23 @@ function commonFlags(opts: { cwd: string; briefingFile?: string; model?: string;
 }
 
 /** omp's data dir is the same for every account; what differs is the
- *  OpenCode Go sign-in. `~/.omp/agent/models.yml` points omp's Go blocks at
- *  the bridge and sends `OPENCODE_GO_API_KEY` as the key: here that "key"
- *  names the session's account, and the bridge puts the account's Console
- *  sign-in on the request (accounts/gocred.ts). No session is started
- *  without one; an omp in your own terminal, which has none, is placed by
- *  the bridge. What must not leak in from the server's shell
- *  is anything that silently points omp at another data dir: an XDG_*_HOME
- *  with an `omp/` under it, a profile, or a session-dir override. */
-function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
+ *  service's credential (accounts/services.ts). `~/.omp/agent/models.yml`
+ *  points omp's Go blocks at the bridge and sends `OPENCODE_GO_API_KEY` as
+ *  the key: on a Go account that "key" names the account, and the bridge puts
+ *  the account's Console sign-in on the request (accounts/gocred.ts). An
+ *  api-key service's block names its `keyEnv`, which a session on such an
+ *  account is given the account's key in. No session is started without an
+ *  account; an omp in your own terminal, which has none, is placed by the
+ *  bridge for Go and runs on its own key for anything else. What must not
+ *  leak in from the server's shell is anything that silently points omp at
+ *  another data dir: an XDG_*_HOME with an `omp/` under it, a profile, or a
+ *  session-dir override. */
+function ompAccountCommand(account: Pick<Account, "id" | "provider" | "home">): Pick<Command, "env" | "unset" | "secret"> {
+  const svc = serviceOf(account);
+  if (svc?.login === "api-key" && svc.keyEnv) {
+    const key = readApiKey(account.home)?.key;
+    return key ? { env: { [svc.keyEnv]: key }, secret: [svc.keyEnv], unset: ompRedirectVars() } : { env: {}, unset: ompRedirectVars() };
+  }
   return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
 }
 
@@ -866,17 +875,39 @@ function defaultModel(path: string): string | null {
   return defaultModelRead.model;
 }
 
-/** The account a running omp was started on, from the "key" it was given. */
+/** The account a running omp was started on, from the key it was given: a
+ *  Go account's name, else an api-key account's own key. */
 function accountOfEnv(env: Map<string, string> | null, accounts: readonly Account[]): Account | undefined {
-  const key = env?.get("OPENCODE_GO_API_KEY");
-  if (!key?.startsWith(GO_ACCOUNT_BEARER)) return undefined;
-  return accounts.find((a) => a.id === key.slice(GO_ACCOUNT_BEARER.length));
+  if (!env) return undefined;
+  const go = env.get("OPENCODE_GO_API_KEY");
+  if (go?.startsWith(GO_ACCOUNT_BEARER)) return accounts.find((a) => a.id === go.slice(GO_ACCOUNT_BEARER.length));
+  return accounts.find((a) => {
+    const held = readApiKey(a.home);
+    const keyEnv = service(held?.service)?.keyEnv;
+    return !!held && !!keyEnv && env.get(keyEnv) === held.key;
+  });
 }
 
-/** A session's account env, with the bridge its Go requests go through up. */
-function ompLaunch(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
-  ensureBridge();
+/** A session's account env, with the bridge up for a Go account's requests. */
+function ompLaunch(account: Pick<Account, "id" | "provider" | "home">): Pick<Command, "env" | "unset" | "secret"> {
+  if (serviceOf(account)?.login === "go-console") ensureBridge();
   return ompAccountCommand(account);
+}
+
+/** What a session on an account of `id` starts on unasked: omp's default
+ *  when the service sells it, else the first model the service's first
+ *  block in `models.yml` declares. */
+function defaultModelOn(id: string): string | null {
+  const svc = SERVICES.find((s) => s.id === id);
+  if (!svc) return null;
+  const fallback = defaultModel(join(agentDir(), "config.yml"));
+  if (serviceOfModel(fallback)?.id === svc.id) return fallback;
+  const blocks = ompModelsConfig(agentDir())?.providers ?? {};
+  for (const block of svc.providers) {
+    const first = blocks[block]?.models?.[0]?.id;
+    if (first) return `${block}/${first}`;
+  }
+  return null;
 }
 
 /** The editor: the foot of its box holds what is typed, between the corners,
@@ -913,6 +944,7 @@ export const ompAdapter: ProviderAdapter = {
   defaultModel() {
     return defaultModel(join(agentDir(), "config.yml"));
   },
+  defaultModelOn,
   // Its sign-in is agentbox's own command (accounts/login.ts), not omp's.
   authEnv: () => ({ env: {}, unset: ompRedirectVars() }),
 
@@ -981,8 +1013,8 @@ export const ompAdapter: ProviderAdapter = {
 
   subagentLogDir: (ref) => ref.path.slice(0, -".jsonl".length),
 
-  // Every OpenCode Go account runs on the one session store (only the
-  // sign-in differs), so a session is already wherever it is resumed.
+  // Every account runs on the one session store (only the credential
+  // differs), so a session is already wherever it is resumed.
   sharedStore: true,
   moveSession: ({ transcriptPath }) => transcriptPath,
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AccountView, AppState, CreditBalance, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
 import { api, useNow } from "../api";
-import { accountProvider, ORG_PROVIDERS } from "../../../src/core/providers/account";
+import { accountProvider, ORG_PROVIDERS, service, SERVICES } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
-import { outstandingOf, shortForecastHow, sortWindows } from "../lib/usage";
+import { noLimitOf, outstandingOf, planOf, shortForecastHow, sortWindows } from "../lib/usage";
 import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
 import { Insights } from "./Insights";
@@ -254,7 +254,10 @@ function AccountCard({
   // The pool's mirror of another member's login.
   const pooled = !a.scopes.includes("personal");
   const sharer = pooled ? state.org?.accounts.find((x) => x.id === a.id)?.addedBy : undefined;
-  const sharable = !!org && !pooled && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
+  const keyed = service(a.service)?.login === "api-key";
+  // A key stays on its machine: the org's store mirrors sign-ins.
+  const sharable = !!org && !pooled && !keyed && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
+  const [rekey, setRekey] = useState(false);
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
@@ -334,8 +337,8 @@ function AccountCard({
       </header>
 
       <div className="ac-sub">
-        <span>{a.email ?? <span className="faint">no email yet</span>}</span>
-        {a.plan ? <span className="ac-plan">{a.plan}</span> : null}
+        <span>{a.email ?? <span className="faint">{keyed ? "API key" : "no email yet"}</span>}</span>
+        {planOf(a) ? <span className="ac-plan">{planOf(a)}</span> : null}
         <AuthBadge account={a} now={now} />
       </div>
       <div className="ac-home mono" title={a.home}>
@@ -380,7 +383,9 @@ function AccountCard({
           <p className="hint">
             {a.auth.state === "missing"
               ? "No usage until it is logged in."
-              : a.usage.source === "none"
+              : noLimitOf(a)
+                ? noLimitOf(a)
+                : a.usage.source === "none"
                 ? "No usage data from this provider."
                 : "No usage reading yet."}
           </p>
@@ -535,25 +540,32 @@ function AccountCard({
       ) : null}
 
       {login ? <LoginPanel login={login} onDismiss={() => onDismissLogin(login.id)} /> : null}
+      {rekey ? <NewKey account={a} onClose={() => setRekey(false)} /> : null}
 
       <footer className="ac-foot">
         <a className="btn btn-ghost btn-sm" data-nav-enter href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
           <Icon.chart size={13} />
           Usage insights
         </a>
-        <Button
-          size="sm"
-          variant="ghost"
-          icon={Icon.key}
-          disabled={busy || (login != null && login.state !== "done" && login.state !== "failed")}
-          onClick={() =>
-            void run(async () => {
-              onLogin(await api.login(a.id));
-            })
-          }
-        >
-          Log in again
-        </Button>
+        {keyed ? (
+          <Button size="sm" variant="ghost" icon={Icon.key} disabled={busy} onClick={() => setRekey(true)}>
+            New key
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={Icon.key}
+            disabled={busy || (login != null && login.state !== "done" && login.state !== "failed")}
+            onClick={() =>
+              void run(async () => {
+                onLogin(await api.login(a.id));
+              })
+            }
+          >
+            Log in again
+          </Button>
+        )}
         {sharable ? (
           <span className="ac-share" title={`${org}'s members can use this login`}>
             <Toggle checked={a.shared} label={`Shared with ${org}`} disabled={busy} onChange={(v) => void run(() => api.shareWithOrg(a.id, v))} />
@@ -850,10 +862,14 @@ function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismiss: () =
   );
 }
 
-/** omp's accounts are OpenCode Go sign-ins, which opencode sessions use too. */
+/** omp's accounts are logins to the services it runs on (opencode runs on
+ *  the OpenCode Go ones). */
 function sectionTitle(p: ProviderId): string {
-  return p === "omp" ? "OpenCode Go · omp and opencode" : PROVIDER_LABEL[p];
+  const on = servicesOf(p);
+  return on.length ? `${PROVIDER_LABEL[p]} · ${on.map((s) => s.label).join(" and ")}` : PROVIDER_LABEL[p];
 }
+
+const servicesOf = (p: ProviderId) => SERVICES.filter((s) => s.harnesses.includes(p));
 
 // ---------------------------------------------------------------- dialogs
 
@@ -870,25 +886,49 @@ function AddAccount({
   onStarted: (l: LoginFlow) => void;
 }) {
   const [label, setLabel] = useState(expect ?? "");
+  const services = servicesOf(provider);
+  const [on, setOn] = useState(services[0]?.id ?? null);
+  const svc = service(on);
+  const keyed = svc?.login === "api-key";
+  const [key, setKey] = useState("");
   const { run, busy, error } = useAction();
   return (
-    <Modal
-      title={`Add ${provider === "omp" ? "an OpenCode Go" : `a ${PROVIDER_LABEL[provider]}`} account`}
-      onClose={onClose}
-    >
+    <Modal title={`Add ${svc ? `a ${svc.label}` : `a ${PROVIDER_LABEL[provider]}`} account`} onClose={onClose}>
       <form
         className="acs-form"
         onSubmit={(e) => {
           e.preventDefault();
           void run(async () => {
+            if (keyed) {
+              await api.addKeyAccount(provider, svc!.id, key.trim(), label.trim() || undefined);
+              onClose();
+              return;
+            }
             const r = await api.addAccount(provider, label.trim() || undefined);
             onStarted(r.login);
           });
         }}
       >
-        <Field label="Label" hint="Defaults to the email">
+        {services.length > 1 ? (
+          <Field label="Runs on">
+            <span className="acs-services" role="radiogroup" aria-label="Service">
+              {services.map((s) => (
+                <label key={s.id}>
+                  <input type="radio" name="service" checked={on === s.id} onChange={() => setOn(s.id)} /> {s.label}
+                  <span className="faint"> · {s.login === "api-key" ? "API key" : "sign in"}</span>
+                </label>
+              ))}
+            </span>
+          </Field>
+        ) : null}
+        <Field label="Label" hint={keyed ? `Defaults to ${svc!.label}` : "Defaults to the email"}>
           <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. work, personal, team-b" />
         </Field>
+        {keyed ? (
+          <Field label="API key" hint={`Checked with ${svc!.label} before it is kept, in this account's home only.`}>
+            <input type="password" className="mono" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} />
+          </Field>
+        ) : null}
         {expect ? (
           <p className="ac-twin">
             <Icon.alert size={12} />
@@ -900,8 +940,39 @@ function AddAccount({
         {error ? <p className="error-line">{error}</p> : null}
         <div className="modal-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" icon={Icon.key} loading={busy}>
-            Start login
+          <Button type="submit" variant="primary" icon={Icon.key} loading={busy} disabled={keyed && !key.trim()}>
+            {keyed ? "Add account" : "Start login"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** An api-key account's "log in again": a new key, checked before it replaces the old. */
+function NewKey({ account: a, onClose }: { account: AccountView; onClose: () => void }) {
+  const [key, setKey] = useState("");
+  const { run, busy, error } = useAction();
+  return (
+    <Modal title={`New key for ${a.label}`} onClose={onClose}>
+      <form
+        className="acs-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run(async () => {
+            await api.patchAccount(a.id, { apiKey: key.trim() });
+            onClose();
+          });
+        }}
+      >
+        <Field label="API key" hint="Sessions started from now on use it; running ones keep the key they started with.">
+          <input autoFocus type="password" className="mono" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} />
+        </Field>
+        {error ? <p className="error-line">{error}</p> : null}
+        <div className="modal-actions">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" icon={Icon.key} loading={busy} disabled={!key.trim()}>
+            Replace key
           </Button>
         </div>
       </form>

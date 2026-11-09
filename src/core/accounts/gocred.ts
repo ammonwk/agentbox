@@ -1,5 +1,5 @@
-/** OpenCode Go credentials: one per omp account, which omp and opencode
- * sessions share (see `accountProvider`).
+/** OpenCode Go credentials: one per omp account on Go (services: see
+ * `SERVICES`), which omp and opencode sessions share (see `accountProvider`).
  *
  * Every account is an OpenCode Console sign-in — the device flow
  * `opencode auth login opencode` runs, done by agentbox itself

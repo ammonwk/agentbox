@@ -11,7 +11,7 @@
  * already registered.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -33,6 +33,7 @@ import { defaultDismissed, dismissDefault, getAccount, insertAccount, listAccoun
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
 import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
+import { readApiKey } from "./services";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
@@ -116,6 +117,10 @@ const HOMES: Record<AccountProvider, { credentials: string; login?(a: Pick<Accou
   omp: {
     credentials: GO_LOGIN_FILE,
     login(a) {
+      // Two homes holding one key are one account, as two sign-ins as one
+      // OpenCode account are.
+      const k = readApiKey(a.home);
+      if (k) return `omp|${k.service}|${createHash("sha256").update(k.key).digest("hex").slice(0, 16)}`;
       const g = readGoLogin(a.home);
       return g?.accountID ? `omp|${g.accountID}|${g.orgID ?? ""}` : null;
     },

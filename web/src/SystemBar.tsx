@@ -5,7 +5,7 @@ import { accountHue, PROVIDER_LABEL } from "./bits";
 import { titleOf } from "./lib/board";
 import { cpuTone } from "./lib/format";
 import { fmtCountdown } from "./lib/format";
-import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
+import { headlineWindows, noLimitOf, planOf, resetText, usageTone, usedNow } from "./lib/usage";
 
 /**
  * The machine, along the bottom of every view.
@@ -366,8 +366,14 @@ export function AccountLimit({ accountId, accounts }: { accountId: string | null
       title={limitTitle(account, now)}
     >
       <i className="sys-limit-dot" aria-hidden="true" />
-      <LimitRow kind="5h" w={short} now={now} />
-      <LimitRow kind="wk" w={weekly} now={now} />
+      {noLimitOf(account) ? (
+        <span className="sys-limit-none">no limit</span>
+      ) : (
+        <>
+          <LimitRow kind="5h" w={short} now={now} />
+          <LimitRow kind="wk" w={weekly} now={now} />
+        </>
+      )}
     </span>
   );
 }
@@ -378,6 +384,8 @@ export function AccountLimit({ accountId, accounts }: { accountId: string | null
  * several logins on one of them are otherwise a row of identical-looking bars.
  */
 function limitTitle(account: AccountView, now: number): string {
+  const none = noLimitOf(account);
+  if (none) return `${whoOf(account)}\n${none}` + (account.usage.stale ? `\nStale: ${account.usage.stale}` : "");
   const { short, weekly } = headlineWindows(account.usage);
   const line = (w: UsageWindow | null, name: string) =>
     w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
@@ -388,11 +396,13 @@ function limitTitle(account: AccountView, now: number): string {
   );
 }
 
-/** "Claude · dev@example.com · max" — service, login, plan. */
+/** "Claude · dev@example.com · max", "omp · Morph" — CLI, login, plan (for
+ *  an omp account, its service). */
 function whoOf(account: AccountView): string {
   const name = account.label || account.email || account.id;
   const email = account.email && account.email !== name ? ` · ${account.email}` : "";
-  return `${PROVIDER_LABEL[account.provider]} · ${name}${email}${account.plan ? ` · ${account.plan}` : ""}`;
+  const plan = planOf(account);
+  return `${PROVIDER_LABEL[account.provider]} · ${name}${email}${plan ? ` · ${plan}` : ""}`;
 }
 
 /** 5-hour on top in the accent, weekly under it in grey. The tooltip names them. */
@@ -442,12 +452,16 @@ function SystemDetail({ sys, owners, limits, now }: { sys: SystemState; owners: 
               return (
                 <div key={a.id} className="syslimits-acct" data-stale={a.usage.stale ? true : undefined} title={limitTitle(a, now)}>
                   <span className="muted syslimits-name">{whoOf(a)}</span>
-                  <span className="syslimits-row">
-                    <span className="faint">5h</span>
-                    <LimitRow kind="5h" w={short} now={now} />
-                    <span className="faint syslimits-wk">wk</span>
-                    <LimitRow kind="wk" w={weekly} now={now} />
-                  </span>
+                  {noLimitOf(a) ? (
+                    <span className="syslimits-row faint">no daily or weekly limit</span>
+                  ) : (
+                    <span className="syslimits-row">
+                      <span className="faint">5h</span>
+                      <LimitRow kind="5h" w={short} now={now} />
+                      <span className="faint syslimits-wk">wk</span>
+                      <LimitRow kind="wk" w={weekly} now={now} />
+                    </span>
+                  )}
                 </div>
               );
             })}

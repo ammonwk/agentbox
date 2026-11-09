@@ -22,6 +22,7 @@ import type {
   CreditReading,
   PromptMenu,
   ProviderId,
+  ServiceId,
   QueuedMessage,
   TimelineEvent,
   TimelinePage,
@@ -379,7 +380,7 @@ export interface ProviderAdapter {
 
   /** Environment that points the CLI at this account; `{}` plus `unset` of
    *  the relevant variable for the default account. */
-  accountCommand(account: Account): Pick<Command, "env" | "unset">;
+  accountCommand(account: Account): Pick<Command, "env" | "unset" | "secret">;
 
   /**
    * Environment for the CLI's own auth commands (`login`, `auth status`),
@@ -486,6 +487,11 @@ export interface ProviderAdapter {
   /** The model a session started without one runs on (`provider/model`, as
    *  its transcript names it), where the CLI's own config says. */
   defaultModel?(): string | null;
+
+  /** What a session on an account of `service` starts on when no model is
+   *  asked: `defaultModel()` when that service sells it, else the service's
+   *  own first model. Only for a CLI whose accounts are on services. */
+  defaultModelOn?(service: ServiceId): string | null;
 
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,

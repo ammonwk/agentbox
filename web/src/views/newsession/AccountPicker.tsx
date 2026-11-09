@@ -3,7 +3,7 @@ import type { AccountView, Candidate, Placement } from "../../../../src/core/typ
 import { accountHue } from "../../bits";
 import { Icon, Spinner } from "../../components";
 import { fmtPts } from "../../lib/format";
-import { headlineWindows, shortForecastHow, usageTone } from "../../lib/usage";
+import { headlineWindows, noLimitOf, planOf, shortForecastHow, usageTone } from "../../lib/usage";
 import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
 
 /**
@@ -241,19 +241,23 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
   const hue = accountHue(a.id, all);
   const { short, weekly } = headlineWindows(a.usage);
   const auth = a.auth.state !== "ok" ? a.auth.state : null;
+  const plan = planOf(a);
+  const none = noLimitOf(a);
   return (
     <span className="ns-acct-line" style={{ ["--acct" as string]: `var(--acct-${hue})` }}>
       <span className="acct-dot" aria-hidden="true" />
       <span className="ns-acct-label">{a.label}</span>
-      {a.plan ? <span className="ns-acct-plan">{a.plan}</span> : null}
+      {plan ? <span className="ns-acct-plan">{plan}</span> : null}
       {auth ? <span className="ns-tag ns-tag-warn">{auth}</span> : null}
-      <MiniBar
-        label="5h"
-        used={c?.short ?? short?.usedPct ?? null}
-        effective={c?.shortEffective ?? null}
-        forecast={shortForecastHow(c?.shortPace)}
-      />
-      {c?.budget ? (
+      {none ? (
+        <span className="ns-tag" title={none}>
+          no limit
+        </span>
+      ) : null}
+      {none ? null : (
+        <MiniBar label="5h" used={c?.short ?? short?.usedPct ?? null} effective={c?.shortEffective ?? null} forecast={shortForecastHow(c?.shortPace)} />
+      )}
+      {none ? null : c?.budget ? (
         // The limit that runs out first: the weekly, or Go's monthly with less left.
         <MiniBar label={BUDGET_TAG[c.budget.label.toLowerCase()] ?? c.budget.label.toLowerCase()} used={c.budget.used} effective={c.budget.effective} />
       ) : (

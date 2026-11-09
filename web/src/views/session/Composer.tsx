@@ -15,7 +15,7 @@ import { dropEcho } from "./echo";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
-import { accountProvider } from "../../../../src/core/providers/account";
+import { runsOn, servesModel } from "../../../../src/core/providers/account";
 
 /** What the composer can do for a session. One with no process (parked or
  *  stopped) is written to like a live one: the message resumes it. */
@@ -504,7 +504,8 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
     };
   }, [session.id, hit.at]);
 
-  const mine = accounts.filter((a) => a.provider === accountProvider(session.provider));
+  // Where it can go: an account whose service sells its model.
+  const mine = accounts.filter((a) => runsOn(a, session.provider) && servesModel(a.service, session.provider, session.model));
   const movable = MOVABLE[session.provider] === true && mine.length > 1;
   // Offer a move only when some other account is not behind a wall (a spent
   // window, logged out, refused): with every one full there is nowhere to go.

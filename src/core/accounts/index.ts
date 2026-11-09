@@ -8,7 +8,8 @@
 
 import { EventEmitter } from "node:events";
 import { deleteAccount, dismissDefault, getAccount, insertAccount, listAccounts, restoreAccount, updateAccount } from "../db";
-import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
+import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, ServiceId, UsageWindow } from "../types";
+import { checkApiKey, service, serviceOf, writeApiKey } from "./services";
 import type { TranscriptUsage } from "../providers/types";
 import type { ExecFn } from "./exec";
 import {
@@ -36,6 +37,7 @@ export { AccountError } from "./homes";
 export type AccountWithStatus = Account & {
   auth: AccountAuth;
   usage: AccountUsage;
+  service: ServiceId | null;
 };
 
 export interface AccountsServiceOptions {
@@ -153,6 +155,51 @@ export class AccountsService extends EventEmitter {
     return { account, login };
   }
 
+  /**
+   * A new account on a service sold on a key (services.ts): the key is asked
+   * of the service first, so a mistyped one never becomes an account, then
+   * kept in a fresh home. There is no login to run.
+   */
+  async createWithKey(provider: AccountProvider, serviceId: string, key: string, label?: string): Promise<Account> {
+    const svc = service(serviceId);
+    if (!svc || svc.login !== "api-key" || !svc.harnesses.includes(provider)) throw new AccountError(400, `${provider} has no service "${serviceId}" that takes a key`);
+    key = key.trim();
+    if (!key) throw new AccountError(400, "the key is empty");
+    await this.checkKey(svc.id, key);
+    const id = newAccountId();
+    const home = createAccountHome(provider, id);
+    writeApiKey(home, svc.id, key);
+    const account: Account = { id, provider, label: label?.trim() || svc.label, email: null, plan: svc.label, home, isDefault: false, enabled: true, createdAt: Date.now() };
+    insertAccount(account);
+    await this.reidentify(id);
+    void this.usage.refresh(id).catch(() => undefined);
+    this.emit("change");
+    return getAccount(id) ?? account;
+  }
+
+  /** Give an api-key account a new key: its "log in again". */
+  async setKey(id: string, key: string): Promise<Account> {
+    const a = getAccount(id);
+    if (!a) throw new AccountError(404, `no account ${id}`);
+    const svc = serviceOf(a);
+    if (svc?.login !== "api-key") throw new AccountError(400, `${a.label} logs in; it takes no key`);
+    key = key.trim();
+    if (!key) throw new AccountError(400, "the key is empty");
+    await this.checkKey(svc.id, key);
+    writeApiKey(a.home, svc.id, key);
+    await this.reidentify(id);
+    void this.usage.refresh(id).catch(() => undefined);
+    this.emit("change");
+    return getAccount(id)!;
+  }
+
+  private async checkKey(serviceId: string, key: string): Promise<void> {
+    const svc = service(serviceId)!;
+    const verdict = await checkApiKey(svc, key, this.opts.fetch);
+    if (verdict === "refused") throw new AccountError(400, `${svc.label} refused that key`);
+    if (verdict !== "ok") throw new AccountError(409, `could not check the key: ${verdict}`);
+  }
+
   async importHome(provider: AccountProvider, home: string): Promise<Account> {
     const { account } = await importHomeImpl(provider, home, {
       identifyEmail: async (a) => (await identify(a, { exec: this.opts.exec })).email,
@@ -215,6 +262,7 @@ export class AccountsService extends EventEmitter {
   login(accountId: string): LoginFlow {
     const a = getAccount(accountId);
     if (!a) throw new AccountError(404, `no account ${accountId}`);
+    if (serviceOf(a)?.login === "api-key") throw new AccountError(400, `${a.label} has no login: give it a new key instead`);
     resyncShared(a);
     return this.logins.start(a);
   }
@@ -261,7 +309,7 @@ export class AccountsService extends EventEmitter {
     // current without waiting for the identity sweep: the cache expires after
     // a minute and this re-reads.
     if (a.provider !== "devin") void this.maybeReidentify(a).catch(() => undefined);
-    return { ...a, auth, usage };
+    return { ...a, auth, usage, service: serviceOf(a)?.id ?? null };
   }
 
   private async maybeReidentify(a: Account): Promise<void> {

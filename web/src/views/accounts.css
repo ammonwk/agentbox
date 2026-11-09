@@ -53,6 +53,11 @@
   flex-direction: column;
   gap: 12px;
 }
+.acs-services {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 
 /* -------------------------------------------------------------------- card */
 

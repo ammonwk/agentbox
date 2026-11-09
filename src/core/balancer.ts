@@ -125,7 +125,8 @@ const STOP_HOLD_MS = 12 * HOUR;
  * spent window run on (Claude did, at a week read 100%). It holds until a
  * reading taken since has no window at its limit (it reset, was redeemed, or
  * the plan grew), else until the latest reset among the windows spent since
- * before it struck, else the wait or time it names, else `STOP_HOLD_MS`.
+ * before it struck, else the wait or time it names, else `holdMs`: the
+ * account's service's (a per-minute cap's minute), or `STOP_HOLD_MS`.
  * `model` picks which model-scoped windows count.
  */
 export function stoppedSince(
@@ -133,6 +134,7 @@ export function stoppedSince(
   now: number,
   usage?: { at: number | null; windows: UsageWindow[] },
   model?: string | null,
+  holdMs = STOP_HOLD_MS,
 ): { at: number; detail: string; until: number } | null {
   const hit = [...hits].sort((a, b) => b.at - a.at)[0];
   if (!hit) return null;
@@ -144,7 +146,7 @@ export function stoppedSince(
     .filter((w) => w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now && w.resetsAt - (w.windowMs || WEEK) <= hit.at)
     .map((w) => w.resetsAt!);
   const wait = statedWaitMs(hit.detail);
-  const until = spent.length ? Math.max(...spent) : wait !== null ? hit.at + wait : (statedUntil(hit.detail, hit.at) ?? hit.at + STOP_HOLD_MS);
+  const until = spent.length ? Math.max(...spent) : wait !== null ? hit.at + wait : (statedUntil(hit.detail, hit.at) ?? hit.at + holdMs);
   return until > now ? { ...hit, until } : null;
 }
 

@@ -39,7 +39,7 @@ import { filterModels, modelName, rankModels, repoOfSession, skillsFor, type Mod
 import { sessionProject, useProjectData, useScope } from "../../lib/projects";
 import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
-import { outstandingOf, sortWindows } from "../../lib/usage";
+import { noLimitOf, outstandingOf, planOf, sortWindows } from "../../lib/usage";
 import { Dropdown, type MenuItem } from "../newsession/Dropdown";
 import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex, withResolved } from "../../lib/sessionrefs";
@@ -570,10 +570,10 @@ function AccountUsage({ accountId, accounts, cold }: { accountId: string | null;
         <div className="sx-usage" ref={pop} style={style} role="group" aria-label={`Usage of ${a.label}`} onClick={(e) => e.stopPropagation()}>
           <div className="sx-usage-head">
             <strong>{a.label}</strong>
-            {a.plan ? <span className="muted">{a.plan}</span> : null}
+            {planOf(a) ? <span className="muted">{planOf(a)}</span> : null}
           </div>
           {windows.length === 0 ? (
-            <div className="faint">{a.usage.source === "none" ? "This provider reports no usage." : "No usage read yet."}</div>
+            <div className="faint">{noLimitOf(a) ?? (a.usage.source === "none" ? "This provider reports no usage." : "No usage read yet.")}</div>
           ) : (
             windows.map((w) => <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />)
           )}

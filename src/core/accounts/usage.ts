@@ -12,8 +12,9 @@
  *   readings the fleet parses from rollout `token_count` events. A recent
  *   rollout reading likewise pushes the endpoint back.
  * - devin: Connect-JSON `GetUserStatus`, every 10 min, best effort.
- * - omp (OpenCode Go): Go's usage report, `GET …/go/v1/usage`, every 3 min,
- *   through the bridge, which holds the credentials.
+ * - omp on OpenCode Go: Go's usage report, `GET …/go/v1/usage`, every 3 min,
+ *   through the bridge, which holds the credentials. On an api-key service
+ *   (Morph), no windows: only whether the service still takes the key.
  *
  * agentbox never refreshes a token (docs/v2.md). An expired access token
  * means we do not call the endpoint at all — a request would 401 — and the
@@ -31,6 +32,7 @@ import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
 import { hasGoCredential } from "./gocred";
+import { checkApiKey, readApiKey, serviceOf, type ModelService } from "./services";
 import { codexCredits } from "../providers/codex-transcript";
 import type { TranscriptUsage } from "../providers/types";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
@@ -642,7 +644,23 @@ async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading>
   return { kind: "ok", at: now, windows, notes: [], source: "endpoint" };
 }
 
+// --------------------------------------------------------- api-key services
+
+/** A service sold on a key reports no usage (Morph: per-minute caps it does
+ *  not say the state of), so a reading is whether it still takes the key:
+ *  no windows, or the key refused. */
+async function fetchKeyUsage(account: Account, svc: ModelService, deps: UsageDeps): Promise<Reading> {
+  const held = readApiKey(account.home);
+  if (!held) return { kind: "skip", stale: "no API key" };
+  const verdict = await checkApiKey(svc, held.key, deps.fetch);
+  if (verdict === "refused") return { kind: "error", stale: `${svc.label} refused the key — add the account again with a new one`, unauthorized: true, sessionsRefused: true };
+  if (verdict !== "ok") return { kind: "error", stale: verdict };
+  return { kind: "ok", at: deps.now(), windows: [], notes: [], source: "endpoint" };
+}
+
 function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
+  const svc = serviceOf(account);
+  if (svc?.login === "api-key") return fetchKeyUsage(account, svc, deps);
   switch (account.provider) {
     case "muse": return Promise.resolve({ kind: "skip", stale: "Muse Code does not expose subscription usage windows here" });
     case "claude": return fetchClaudeUsage(account, deps);

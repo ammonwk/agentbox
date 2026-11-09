@@ -12,8 +12,9 @@
  *     `haiku`, `opusplan`, each with a `[1m]` variant), plus the extra
  *     options the CLI cached for this account (`additionalModelOptionsCache`
  *     in its `.claude.json`, e.g. a `[1m]` variant the server pushed).
- *   - omp: the providers declared in `models.yml`, with omp's own catalog for
- *     each (`models.db`), as `provider/id`.
+ *   - omp: the providers declared in `models.yml` that the account's service
+ *     sells (or that none does), with omp's own catalog for each
+ *     (`models.db`), as `provider/id`.
  *   - opencode: `opencode models`, kept to OpenCode Go and Zen — the login
  *     its sessions share with omp's account. Its ids are models.dev's.
  *   - devin: `devin models list --format json` — the CLI's own per-account
@@ -39,6 +40,7 @@ import { devinAdapter } from "./providers/devin";
 import { BRIDGED } from "../bridge/models";
 import { agentDir } from "./providers/omp";
 import { ompModelCatalog, ompModelsConfig } from "./providers/omp-models";
+import { accountServes } from "./accounts/services";
 import type { Account, ModelOption, ProviderId } from "./types";
 import { museModels } from "./providers/muse";
 import type { ModelFamily } from "../subagents/parent";
@@ -219,10 +221,12 @@ function codexModels(account: Account, dev: ModelsDev): ModelOption[] {
 /** omp's provider names are models.dev's, except zen, which models.dev calls `opencode`. */
 const OMP_DEV_PROVIDER: Record<string, string> = { "opencode-zen": "opencode", "opencode-zen-responses": "opencode", "opencode-go-responses": "opencode-go" };
 
-function ompModels(dev: ModelsDev): ModelOption[] {
+/** The account's: the blocks its service sells, and those no service here
+ *  sells, which run on whatever key omp holds for them. */
+function ompModels(account: Account, dev: ModelsDev): ModelOption[] {
   const dir = agentDir();
   const yml = ompModelsConfig(dir);
-  const providers = Object.entries(yml?.providers ?? {});
+  const providers = Object.entries(yml?.providers ?? {}).filter(([block]) => accountServes(account, "omp", `${block}/`));
   if (providers.length === 0) return [];
 
   const catalog = ompModelCatalog(dir);
@@ -423,7 +427,7 @@ export async function modelOptions(account: Account, provider: ProviderId = acco
     case "codex":
       return codexModels(account, dev);
     case "omp":
-      return ompModels(dev);
+      return ompModels(account, dev);
     default:
       return [];
   }

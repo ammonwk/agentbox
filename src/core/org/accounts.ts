@@ -25,6 +25,7 @@ import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
 import type { Account, AccountProvider } from "../types";
 import { ORG_PROVIDERS } from "../providers/account";
+import { serviceOf } from "../accounts/services";
 import { isOrgHome, machineName, orgAccountsRoot, personName, readOrg } from "./config";
 import { seal, unseal } from "./seal";
 import { storeAccounts, type StoreAccount } from "./store";
@@ -410,6 +411,8 @@ export async function shareWithOrg(accountId: string): Promise<void> {
   if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
   if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s mirror of someone else's login`);
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
+  // The store keeps and refreshes sign-ins; a key is not one it mirrors.
+  if (serviceOf(a)?.login === "api-key") throw new OrgAccountError(400, `${a.label} runs on a key, which stays on its machine (docs/org.md)`);
   const col = await storeAccounts();
   if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
   const kept = await keptAs(a);

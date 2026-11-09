@@ -13,6 +13,7 @@ import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { authEnv, claudeJsonPath, credentialsPath } from "./homes";
 import { readGoLogin } from "./gocred";
+import { readApiKey, serviceOf } from "./services";
 
 export interface Identity {
   email: string | null;
@@ -273,6 +274,13 @@ export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?:
     case "codex": return identifyCodex(account, now);
     case "devin": return identifyDevin(account, opts.exec);
     case "omp": {
+      // A key says nothing of who holds it: the service is its plan.
+      const svc = serviceOf(account);
+      if (svc?.login === "api-key") {
+        return readApiKey(account.home)
+          ? { email: null, plan: svc.label, auth: { state: "ok", expiresAt: null, detail: null } }
+          : { email: null, plan: svc.label, auth: { state: "missing", expiresAt: null, detail: "no API key" } };
+      }
       // An OpenCode Go account: a Console sign-in, which says who it is. Its
       // access token running out is not the login running out: the bridge
       // refreshes it (accounts/gocred.ts).

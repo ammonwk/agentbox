@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule, Scope } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
-import { accountProvider } from "../../../src/core/providers/account";
+import { runsOn } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
@@ -195,7 +195,7 @@ export function NewSession({
   // In an org, the org's pool or your own accounts; out of one, your own.
   const [scope, setScope] = useState<Scope>(state.org ? state.settings.scope : "personal");
   const accounts = useMemo(
-    () => state.accounts.filter((a) => a.provider === accountProvider(provider) && a.scopes.includes(scope)),
+    () => state.accounts.filter((a) => runsOn(a, provider) && a.scopes.includes(scope)),
     [state.accounts, provider, scope],
   );
   // A remembered pin to an account that is gone is not a pin.
