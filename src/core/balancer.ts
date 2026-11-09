@@ -549,7 +549,7 @@ export function place(req: PlaceRequest): Placement {
   }
 
   const chosen = eligible[0]!;
-  return { ...base, accountId: chosen.accountId, mode: "auto", why: explain(chosen, eligible, req.now) };
+  return { ...base, accountId: chosen.accountId, mode: "auto", why: explain(chosen, eligible, req.now, req.unmetered) };
 }
 
 /** "1d 14h", "3h 20m", "12m": how long until `at`. */
@@ -559,14 +559,14 @@ function until(at: number, now: number): string {
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 }
 
-function explain(chosen: Candidate, eligible: Candidate[], now: number): string {
+function explain(chosen: Candidate, eligible: Candidate[], now: number, unmetered = false): string {
   if (eligible.length === 1) {
     return chosen.legRoom === null
-      ? `${chosen.label} is the only account that can take it (usage unknown)`
+      ? `${chosen.label} is the only account that can take it${unmetered ? "" : " (usage unknown)"}`
       : `${chosen.label} is the only account that can take it`;
   }
   const next = eligible[1]!;
-  if (chosen.legRoom === null) return `${chosen.label}: no usage reading for any account, so the first one`;
+  if (chosen.legRoom === null) return unmetered ? `${chosen.label}: nothing it runs is metered, so the first one` : `${chosen.label}: no usage reading for any account, so the first one`;
   if (!fits(chosen)) {
     return `no account has 5-hour room to spare for it; ${chosen.label} has the most (${chosen.legRoom} vs ${next.label} ${next.legRoom ?? "unknown"})`;
   }
