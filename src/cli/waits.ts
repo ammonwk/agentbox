@@ -42,8 +42,8 @@ and --for <session id>.`;
 
 /** `agentbox wait <what> … [--timeout 3h] [--for ID]`: arm one and return at once. */
 export async function wait(api: Api, args: string[]): Promise<number> {
-  const [kind, ...more] = args;
-  const { flags, rest } = parseArgs(more, ["require", "only", "head", "timeout", "for", "R", "repo", "name", "every"], ["merged", "feedback"]);
+  // Options may come before what to wait for too: `wait --timeout 45m job -- …`.
+  const { flags, rest: [kind, ...rest] } = parseArgs(args, ["require", "only", "head", "timeout", "for", "R", "repo", "name", "every"], ["merged", "feedback"]);
   const timeout = str(flags.get("timeout"));
   const body: Record<string, unknown> = {
     session: str(flags.get("for")) ?? process.env.AGENTBOX_SESSION,
