@@ -4,6 +4,7 @@
   "description": "Every coding-agent session, across every account",
   "start_url": "/#/sessions",
   "display": "standalone",
+  "launch_handler": { "client_mode": "focus-existing" },
   "background_color": "#0d0d0d",
   "theme_color": "#0d0d0d",
   "icons": [

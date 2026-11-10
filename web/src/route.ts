@@ -243,3 +243,17 @@ export function followLinks(root: HTMLElement): void {
     go(parseHash(href));
   });
 }
+
+/** Where an app launch points (a link opened from another program, a
+ *  shortcut): the manifest's launch_handler hands it to the window already
+ *  open, which follows it as one of its own links. */
+export function followLaunches(): void {
+  type Launch = { targetURL?: string };
+  const queue = (window as { launchQueue?: { setConsumer(fn: (p: Launch) => void): void } }).launchQueue;
+  queue?.setConsumer(({ targetURL }) => {
+    const href = targetURL ? new URL(targetURL).hash : "";
+    if (!href.startsWith("#/") || href === location.hash) return;
+    if (href.includes("?") && scopeOf(href).toString() !== scopeOf().toString()) location.hash = href;
+    else go(parseHash(href));
+  });
+}

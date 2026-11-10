@@ -6,7 +6,7 @@ import { startAccent } from "./lib/accent";
 import { isPhone } from "./lib/phone";
 import { startPush } from "./lib/push";
 import { reloadForMissingChunk } from "./lib/update";
-import { followLinks, listUnderSession } from "./route";
+import { followLaunches, followLinks, listUnderSession } from "./route";
 import { openLinksBehind } from "./lib/backgroundlinks";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
@@ -74,4 +74,5 @@ createRoot(root).render(
   </React.StrictMode>
 );
 followLinks(root);
+followLaunches();
 openLinksBehind(root);
