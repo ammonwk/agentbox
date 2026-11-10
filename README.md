@@ -86,7 +86,16 @@ agentbox attach <id>             # this terminal onto a session (detach: Ctrl-b 
 agentbox resume <id>             # a stopped session, on its own account, then attach
 agentbox adopt <id>              # move a session from another terminal into agentbox
 agentbox stop <id>               # end its process; it stays resumable
+agentbox label <id> 'free: name' # run the tree under <id> as a free lane (below)
 ```
+
+Once a tree of sessions you started holds a second open pull request, the
+steward counts it as a lane: its running sessions fill the same cap as the
+steward's own PR owners (`owner_running`), and the pace line of
+`steward.py state` names it (`owner 11/12 (lanes svdfv2ie 4)`). To run one
+free, label its root `free…`, here or by renaming it on the board; the pace
+line then says `free` and counts nothing for it. Clear the label to count it
+again. A tree with one PR, or none, is never counted.
 
 Accounts are added in the web UI (Accounts → Add account); the provider's own
 login runs and agentbox shows you the URL and code. Existing credential homes
