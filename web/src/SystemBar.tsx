@@ -319,9 +319,9 @@ export function SystemBar({
 
 /**
  * Pauses every agent and everything they started, so the machine is yours
- * (src/core/pause.ts); the same button resumes them where they stopped. While
- * paused it says so, and for how long, at the bar's end: a fleet forgotten in
- * the freezer is a day of work not done.
+ * (src/core/pause.ts); the same button resumes them where they stopped. It
+ * names what a click does, and while paused, for how long, in amber: a fleet
+ * forgotten in the freezer is a day of work not done.
  */
 function PauseButton({ paused }: { paused: number | null }) {
   // What was clicked, until the server's next reading says the same.
@@ -352,7 +352,12 @@ function PauseButton({ paused }: { paused: number | null }) {
           {paused !== null ? <span className="faint">paused {fmtCountdown(now - paused)}</span> : null}
         </>
       ) : (
-        <Icon.pause size={14} />
+        // Labelled, not a bare ⏸: alone, the icon reads as "paused" as
+        // readily as "click to pause".
+        <>
+          <Icon.pause size={14} />
+          <span>Pause agents</span>
+        </>
       )}
     </button>
   );
