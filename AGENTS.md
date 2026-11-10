@@ -82,13 +82,18 @@ edits unstaged.
   `pgrep -f` reads command lines, so an agent whose prompt is an argument is
   found by any word in it: a `pkill -f release-rehearsal` kills the agent
   that was told to run the rehearsal, and every other agent told the same
-  words (on 2026-10-21 that killed seven sessions, and a `pkill -f glob`
-  seventy-one omp sessions). The text goes in a file under `<agentbox home>/sessions/<id>/`
+  words. The text goes in a file under `<agentbox home>/sessions/<id>/`
   and the launch names the file (`src/core/textfile.ts`): claude and omp read
   it, codex is told to read it, and a CLI that takes no file is given the
   prompt by typing it. A prompt a session was *launched with* is kept the
   same way: adopt carries the launch over, and the words go in a file of
   their own rather than on the command line (`src/core/launch.ts`).
+- **Comments and docs say what stays true.** They are read long after
+  they were written, by someone who can't tell which parts still hold. Leave
+  out history (an issue or PR, a date, the incident that taught a rule, how it
+  used to work: the commit body keeps it) and facts nothing enforces (a count,
+  a measurement, a session id, "the only caller", a list of files). Keep the
+  why: the failure a future edit would bring back.
 - **Search the tree, not the machine.** `grep -r` or `find` in `$HOME`, `/`,
   `/tmp`, `~/.local/share/agentbox`, or `~/Documents` reads hundreds of GB and
   millions of files, on one core and for minutes. Scope it to the worktree,
