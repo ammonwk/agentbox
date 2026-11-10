@@ -47,8 +47,10 @@ export function keepClipboard(): (copied: string) => Promise<void> {
     for (let i = 0; i < 15 && run(t.read())?.toString().trimEnd() !== copied; i++) await Bun.sleep(100);
     if (!saved?.length) return;
     // The tool stays up to serve the clipboard: in a scope of its own, so a
-    // restart of the server does not take your clipboard down with it.
-    const scope = Bun.which("systemd-run") ? ["systemd-run", "--user", "--scope", "--collect", "--quiet"] : [];
+    // restart of the server does not take your clipboard down with it. Named,
+    // because pausing the agents freezes anonymous scopes (pause.ts).
+    const unit = `--unit=agentbox-clipboard-${Date.now()}`;
+    const scope = Bun.which("systemd-run") ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", unit] : [];
     try {
       const p = Bun.spawn([...scope, ...t.write(type)], { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
       p.stdin.write(saved);

@@ -1208,6 +1208,14 @@ const router = new Router(mapError)
     scheduleHot();
     return json(s);
   })
+  // ----- pausing every agent (src/core/pause.ts)
+  .add("POST", "/api/pause", async ({ req }) => {
+    const b = await readBody(req);
+    if (typeof b.paused !== "boolean") throw new HttpError(400, "paused: true to pause every agent, false to resume them");
+    const since = fleet.setPaused(b.paused);
+    console.log(`agentbox: ${b.paused ? "paused" : "resumed"} every agent`);
+    return json({ paused: since });
+  })
   // ----- crash recovery (src/core/recovery.ts)
   .add("GET", "/api/recovery", async () => json({ last: fleet.lastRecoveryReport(), preview: await fleet.recoveryPreview() }))
   .add("POST", "/api/recovery", async ({ req }) => {

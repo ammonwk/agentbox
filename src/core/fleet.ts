@@ -106,6 +106,7 @@ import {
   endedDone,
   ShellStillness,
 } from "./park";
+import { holdPaused, pausedSince, setPaused } from "./pause";
 import { cacheExpiring, cacheWarmUntil, KEEP_WARM_MAX, keepWarmNote, keepWarmPlan, type WarmSpell } from "./cache";
 import { read as readLive } from "../subagents/live";
 import { claimRecord, poolKey, poolState, type PoolAgent } from "../subagents/record";
@@ -737,9 +738,13 @@ export class Fleet extends EventEmitter {
     this.reapParked(now);
     this.rebuildViews(since, now);
     lap("views");
-    await this.parkIdle(now, settings.parkIdleMin);
+    // A frozen session looks hung and idle: nothing is parked or nudged
+    // while the fleet is paused (pause.ts).
+    const paused = pausedSince() !== null;
+    if (paused) holdPaused();
+    else await this.parkIdle(now, settings.parkIdleMin);
     // What acts on a session's transcript waits for every one to be read.
-    if (this.caughtUp) {
+    if (this.caughtUp && !paused) {
       this.continueStalled(now);
       this.nudgeErrored(now);
       this.keepWarm(now, settings.parkIdleMin);
@@ -2108,6 +2113,14 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(e.id);
     const agent = rec ? this.poolAgentOf(rec) : undefined;
     if (agent && e.parent) claimRecord(agent.dir, e.parent);
+  }
+
+  /** Pause or resume every agent (pause.ts). */
+  setPaused(on: boolean): number | null {
+    // Every quiet stretch a resumed session shows was the pause's: give it
+    // the startup grace before parking reads one as idle.
+    if (!on) this.nextParkCheck = Math.max(this.nextParkCheck, this.now() + PARK_STARTUP_MS);
+    return setPaused(on);
   }
 
   /** What recovery would do if every running session died now. */

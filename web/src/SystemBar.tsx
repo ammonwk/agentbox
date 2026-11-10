@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AccountView, MetricsState, Session, UsageWindow } from "../../src/core/types";
-import { useMetrics, useNow, type SystemState } from "./api";
+import { request, useMetrics, useNow, type SystemState } from "./api";
+import { Icon } from "./components";
 import { accountHue, PROVIDER_LABEL } from "./bits";
 import { titleOf } from "./lib/board";
 import { cpuTone } from "./lib/format";
@@ -308,10 +309,52 @@ export function SystemBar({
         </span>
       </button>
       {extras}
+      <PauseButton paused={metrics!.paused} />
       </div>
 
       {open ? <SystemDetail sys={sys} owners={owners} limits={limits} now={now} /> : null}
     </div>
+  );
+}
+
+/**
+ * Pauses every agent and everything they started, so the machine is yours
+ * (src/core/pause.ts); the same button resumes them where they stopped. While
+ * paused it says so, and for how long, at the bar's end: a fleet forgotten in
+ * the freezer is a day of work not done.
+ */
+function PauseButton({ paused }: { paused: number | null }) {
+  // What was clicked, until the server's next reading says the same.
+  const [want, setWant] = useState<boolean | null>(null);
+  useEffect(() => setWant(null), [paused]);
+  const now = useNow(30_000);
+  const on = want ?? paused !== null;
+  const toggle = () => {
+    setWant(!on);
+    request("POST", "/api/pause", { paused: !on }).catch(() => setWant(null));
+  };
+  return (
+    <button
+      className="sys-pause"
+      data-paused={on}
+      onClick={toggle}
+      aria-label={on ? "Resume every agent" : "Pause every agent"}
+      title={
+        on
+          ? "Every agent is frozen where it was. Resume carries each on from there; nothing is sent to them."
+          : "Freeze every agent and everything they started (tests, builds), so the machine is yours: for a call, say.\nResuming carries each on from where it stopped."
+      }
+    >
+      {on ? (
+        <>
+          <Icon.play size={14} />
+          <span>Resume agents</span>
+          {paused !== null ? <span className="faint">paused {fmtCountdown(now - paused)}</span> : null}
+        </>
+      ) : (
+        <Icon.pause size={14} />
+      )}
+    </button>
   );
 }
 

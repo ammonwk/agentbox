@@ -1272,6 +1272,34 @@ textarea,
   border-left: 1px solid var(--border);
   font-size: 12px;
 }
+/* Pause every agent: an icon at the bar's end, a labelled warning while on. */
+.sys-pause {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sys-pause:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sys-pause[data-paused="true"] {
+  color: var(--warning);
+  font-weight: 600;
+}
+.sys-pause[data-paused="true"] .faint {
+  font-weight: 400;
+}
 .sys-session {
   display: flex;
   align-items: center;

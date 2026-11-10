@@ -1359,6 +1359,8 @@ export interface MetricsState {
   load: Record<string, LoadSample>;
   /** Where the rest of the CPU goes: the busiest programs no session claims. */
   elsewhere: CpuOwner[];
+  /** When every agent was paused (src/core/pause.ts), or null while they run. */
+  paused: number | null;
 }
 
 /** A program outside every session, with all it has started. */

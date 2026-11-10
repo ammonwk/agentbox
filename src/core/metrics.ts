@@ -18,6 +18,7 @@ import {
   type ProcTable,
 } from "./proc";
 import type { CpuOwner, LoadDetail, MetricsState } from "./types";
+import { pausedSince } from "./pause";
 
 /**
  * The machine, and what each session is taking from it.
@@ -72,7 +73,7 @@ class Metrics {
   /** Each process's systemd unit, for grouping `elsewhere`. */
   private units = new Map<number, { startTicks: number; unit: string }>();
 
-  private state: MetricsState = { at: 0, system: null, load: {}, elsewhere: [] };
+  private state: MetricsState = { at: 0, system: null, load: {}, elsewhere: [], paused: null };
 
   snapshot(): MetricsState {
     return this.state;
@@ -149,6 +150,7 @@ class Metrics {
         system: system ?? this.state.system,
         load,
         elsewhere,
+        paused: pausedSince(),
       };
       metricsEvents.emit("metrics", this.state);
     } finally {

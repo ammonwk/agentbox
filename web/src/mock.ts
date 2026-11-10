@@ -889,7 +889,7 @@ function metrics(): MetricsState {
     { name: "chrome", pid: 4000, cpuPct: 4.4, procs: 31 },
     { name: "agentbox server", pid: 4001, cpuPct: 1.3, procs: 1 },
   ];
-  return { at: Date.now(), system: sys, load, elsewhere };
+  return { at: Date.now(), system: sys, load, elsewhere, paused: null };
 }
 
 // ------------------------------------------------------------- timelines

@@ -13,6 +13,7 @@ import { Keyboard } from "@phosphor-icons/react/dist/csr/Keyboard";
 import { Stack } from "@phosphor-icons/react/dist/csr/Stack";
 import { Plus } from "@phosphor-icons/react/dist/csr/Plus";
 import { Play } from "@phosphor-icons/react/dist/csr/Play";
+import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 import { Stop } from "@phosphor-icons/react/dist/csr/Stop";
 import { BellSimple } from "@phosphor-icons/react/dist/csr/BellSimple";
 import { ArrowsClockwise } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
@@ -93,6 +94,7 @@ export const Icon = {
   cards: icon(Stack),
   plus: icon(Plus),
   play: icon(Play),
+  pause: icon(Pause),
   stop: icon(Stop),
   bell: icon(BellSimple),
   refresh: icon(ArrowsClockwise),
