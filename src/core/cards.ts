@@ -50,7 +50,7 @@ const TITLE_MAX = 200;
 const SHORT_MAX = 1200;
 const LONG_MAX = 200_000;
 /** A turn that ended `STATUS: needs …` this long ago, parked, nobody having said anything since: the ask becomes a
- *  card. In the 7 days to 11-09 you answered 74% of such asks in the conversation within the hour, 84% within two. */
+ *  card. */
 const ASK_AFTER_MS = 60 * 60_000;
 /** One older than this is history (its work moved on, or you chose to leave it), not a new question. */
 const ASK_WITHIN_MS = 24 * 60 * 60_000;
@@ -67,8 +67,8 @@ type Row = {
 
 /** A session has the answer: one said so (`ack`, which sets `delivered_at`),
  *  or the asker's transcript took a prompt after the answer was typed and the
- *  model was called after that. A prompt alone is not enough: 8utngauw
- *  recorded card 671's and was closed before any reply. Providers that do not
+ *  model was called after that. A prompt alone is not enough: a session can
+ *  record the answer and be closed before any reply. Providers that do not
  *  report model calls (`lastTurnAt`) go by the prompt. */
 const TAKEN = `(delivered_at IS NOT NULL OR COALESCE((SELECT json_extract(facts, '$.lastPromptAt') >= cards.typed_at
   AND COALESCE(json_extract(facts, '$.lastTurnAt'), json_extract(facts, '$.lastPromptAt')) >= cards.typed_at
@@ -125,8 +125,8 @@ export function moveCards(from: string, to: string): number {
  *  comes back to them, so they are not finished (`Fleet.workHeld`). */
 export function openAsks(): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  // An answer still in its undo window, not yet typed in, holds its session too: 11-09 the idle closer shut x4spn85d in
-  // the seconds after Ammon answered card 1037 with an MFA code, and the answer, good for 30s, went nowhere.
+  // An answer still in its undo window, not yet typed in, holds its session too, or the idle closer can shut it in the
+  // seconds before the answer arrives, and a short-lived answer (an MFA code) goes nowhere.
   const rows = getDb().query(`SELECT id, session_id FROM cards WHERE kind = 'decision' AND session_id IS NOT NULL AND (state IN ('open','later')
     OR (state = 'answered' AND typed_at IS NULL AND delivered_at IS NULL AND answered_at > ?))`).all(Date.now() - 3_600_000) as { id: number; session_id: string }[];
   for (const r of rows) out.set(r.session_id, [...(out.get(r.session_id) ?? []), `card ${r.id}`]);

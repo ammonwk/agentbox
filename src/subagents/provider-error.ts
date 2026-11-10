@@ -10,10 +10,10 @@
  * plan for a paragraph and then died reads as
  * `…and observed symptoms.server_error: Upstream idle timeout exceeded`.
  *
- * Patterns that were all `^`-anchored and capped at 300 characters only ever
- * matched the first shape. That is how a session once burned seven hours on a
- * gateway's 120-second upstream idle timeout while every turn was recorded as
- * a clean `end_turn`, with no sign anything had gone wrong.
+ * Patterns `^`-anchored and capped at 300 characters only match the first
+ * shape, and a session can then spend hours on a gateway's upstream idle
+ * timeout while every turn is recorded as a clean `end_turn`, with no sign
+ * anything has gone wrong.
  */
 
 /**

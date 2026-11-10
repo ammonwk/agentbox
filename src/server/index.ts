@@ -570,8 +570,8 @@ function scheduleHot(): void {
 }
 
 /** What the last cold frame to the sockets said of each part, as JSON: a
- *  placement's forecast moves every pass, and it alone used to resend the
- *  whole of cold state (the PRs, the skills) every two seconds. */
+ *  placement's forecast moves every pass, and must not resend the whole of
+ *  cold state (the PRs, the skills) with it. */
 let sentCold = new Map<string, string>();
 let coldTimer: ReturnType<typeof setTimeout> | null = null;
 let coldDue = 0;
@@ -1964,7 +1964,7 @@ function welcome(ws: Socket): void {
 export async function startServer(): Promise<void> {
   // Hold the port through startup, which takes a while on a busy machine. A
   // CLI that finds the server slow to answer starts another; found busy only at
-  // Bun.serve, that one used to linger with a whole second fleet ticking in it.
+  // Bun.serve, that one would linger with a whole second fleet ticking in it.
   let hold: { stop(closeActive?: boolean): void };
   try {
     hold = Bun.listen({ hostname: HOST, port: PORT, socket: { open: (s) => void s.end(), data() {} } });

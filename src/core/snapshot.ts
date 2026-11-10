@@ -1,9 +1,9 @@
 /**
  * The server runs from a commit, not from the shared working tree.
  *
- * Several sessions edit the checkout at once, and a restart used to put all
- * of their unfinished edits live: one session restarted for its own fix and
- * the server loaded another's half-written `conversation.ts`. With this on,
+ * Several sessions edit the checkout at once, so a restart from the working
+ * tree would put all of their unfinished edits live: one session restarting
+ * for its own fix would load another's half-written file. With this on,
  * `agentbox serve` in the checkout first moves a worktree of its own
  * (`$AGENTBOX_HOME/live`, detached) to the checkout's HEAD commit, builds
  * that commit's UI there when its `web/` changed, and then replaces itself

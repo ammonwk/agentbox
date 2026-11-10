@@ -20,10 +20,9 @@ export const AWS_CREDENTIAL_ENV = [
 /** The profile a grant adds, named as in ~/.aws/config. */
 const GRANT_PROFILE = "mfa";
 /** A grant is meant to last until its session closes (`dropAgentAws`); this
- * caps it at STS's longest for an IAM user. 4h, the first choice, kept an
- * approval from outliving its task, but a release that outlasts it must ask
- * for a second code mid-release, the cost `aws-mfa` minted 36h to avoid.
- * Closing the session ends the grant, so 36h no longer means sharing it. */
+ * caps it at STS's longest for an IAM user, so a release that outlasts a
+ * shorter cap need not ask for a second code mid-release. Closing the session
+ * ends the grant, so a long cap does not outlive its task. */
 const GRANT_HOURS = 36;
 
 function section(path: string, name: string, keys: string[]): Record<string, string> {

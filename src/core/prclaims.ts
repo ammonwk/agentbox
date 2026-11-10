@@ -135,8 +135,8 @@ export function holderOf(claims: readonly PrClaim[], repo: string, number: numbe
 }
 
 /** Another live session has it. `asker` is the session that asked, named
- *  beside the holder: j2g254q4 read "#8154 is j2g254q4's" as another
- *  session's and stood down from four PRs it held itself. */
+ *  beside the holder, or a session reading its own id as another's stands
+ *  down from PRs it holds itself. */
 export class PrHeld extends Error {
   constructor(readonly claim: PrClaim, holder: Session | undefined, asker?: string) {
     super(

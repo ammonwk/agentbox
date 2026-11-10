@@ -4,9 +4,7 @@
  *
  * `pgrep -f` reads command lines, so an agent whose prompt is an argument is
  * found by any word in it — and a `pkill -f` on one of them kills it, and
- * every other agent that was told the same words. On 2026-10-21 a
- * `pkill -f release-rehearsal` killed seven sessions for exactly this: the
- * words were in their argv.
+ * every other agent that was told the same words.
  */
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

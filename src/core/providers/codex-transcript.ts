@@ -178,8 +178,8 @@ interface Usage {
 /**
  * Codex's usage counts overlap: `cached_input_tokens` (and
  * `cache_write_input_tokens`) are part of `input_tokens`, and
- * `reasoning_output_tokens` is part of `output_tokens` (138 of 204 in a typical
- * record). TokenTotals keeps them disjoint, so input is what is left.
+ * `reasoning_output_tokens` is part of `output_tokens`. TokenTotals keeps them
+ * disjoint, so input is what is left.
  */
 export function codexUsage(u: any): Usage {
   const cacheRead = u?.cached_input_tokens ?? 0;

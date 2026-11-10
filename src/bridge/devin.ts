@@ -438,8 +438,7 @@ const REFUSED = new Set([401, 402, 403, 429]);
 /**
  * Where an omp that names no account goes: one started by hand, by another
  * agent, or by the subagents MCP, which sends whatever models.yml found —
- * opencode's own API key, which is no account and expires on its own (on
- * 2026-10-21 every such omp died on "This API key has expired"). It goes
+ * opencode's own API key, which is no account and expires on its own. It goes
  * where the balancer would start a session of its model, the server's
  * `/api/placement`, and stays there for its conversation
  * (`x-opencode-session`, fixed for an omp's life), so its cache and its
@@ -569,9 +568,9 @@ async function goOnAccount(
 /**
  * How long Go may send nothing, headers or bytes, before the bridge gives the
  * request up. A reasoning model can be quiet for minutes, but a CLI never
- * gives up on an open connection that says nothing: on 2026-10-19 Go sent no
- * headers to an omp request for three hours and the turn hung that long.
- * Failing it hands the CLI an error it retries.
+ * gives up on an open connection that says nothing, so a Go that sends no
+ * headers would hang the turn for as long as it stays silent. Failing it
+ * hands the CLI an error it retries.
  */
 const GO_QUIET_MS = 10 * 60_000;
 

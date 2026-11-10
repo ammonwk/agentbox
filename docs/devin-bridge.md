@@ -92,8 +92,8 @@ when the bridge starts, so restart it from a shell that has them:
 ### What to expect from the provider
 
 OpenCode Go's free LongCat queues. Most replies start in 2 to 5 seconds, but
-the same request has been measured waiting 25s, 90s and seven minutes before
-answering normally, and it once returned an empty reply. So the bridge opens
+the same request can wait minutes before answering normally, and it can
+return an empty reply. So the bridge opens
 the reply to devin at once and sends the empty keep-alive frames devin's own
 server sends, which devin shows as thinking; it waits up to 15 minutes for the
 first byte, treats an empty reply as a failure, and ends a failed reply with

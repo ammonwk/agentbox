@@ -225,7 +225,7 @@ tailnet, where the board has its HTTPS name (headscale cannot issue
 is on the team tailnet as well, through a second, unprivileged tailscaled
 (`~/.config/systemd/user/tailscale-work.service`, userspace networking, state
 in `~/.local/share/tailscale-work`), and reaches plaibook-box1 and box2
-(100.64.0.5 and 100.64.0.7, moved 11-05; netdata bound to those) through it with an `ssh`
+(100.64.0.5 and 100.64.0.7; netdata bound to those) through it with an `ssh`
 `ProxyCommand tailscale --socket=… nc %h %p` in `~/.ssh/config`. Its own
 store goes through its AWS tunnel (127.0.0.1:27180), so its invite is
 `scripts/tailnet/invite.sh`, which swaps in the proxy's address.
@@ -262,7 +262,7 @@ tail.plaibook.tech` and `dns.override_local_dns: false`; and
 127.0.0.1:8080 }`. DERP is Tailscale's public one. A Route53 A record in
 `plaibook.tech` points the name at the Elastic IP. The box is itself a
 node (`headscale`, 100.64.0.1, `tag:server`), and the root disk is encrypted
-(swapped 10-31, SOC 2). Its state is `/var/lib/headscale/db.sqlite`; losing
+(SOC 2). Its state is `/var/lib/headscale/db.sqlite`; losing
 it means every device joins again.
 
 ## When things fail

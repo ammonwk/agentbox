@@ -557,7 +557,7 @@ export function Rail({
 }
 
 /** Rows that fade in when they come into view: the first of each run of
- *  children, about a screenful. Hundreds animating at once took longer to
+ *  children, about a screenful. Hundreds animating at once take longer to
  *  draw than to build, and those past the first screenful are out of sight. */
 const ENTER_ROWS = 24;
 function enters(sec: Section<Nested<SessionRow>>, i: number): boolean {

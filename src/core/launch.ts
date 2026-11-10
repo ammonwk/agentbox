@@ -95,9 +95,8 @@ export interface CarryWhere {
  *
  * An agent that carries its prompt on its command line is found by `pgrep -f`
  * on any word in it, and a `pkill -f` on one of them kills it — and every
- * other agent that was told the same words: on 2026-10-21 a `pkill -f glob`
- * killed forty-four sessions of that fleet at once. The words go to a file
- * and the launch names the file, as the briefing and the first prompt do.
+ * other agent that was told the same words. The words go to a file and the
+ * launch names the file, as the briefing and the first prompt do.
  *
  * `isFile` says whether a value already names a file the provider reads
  * itself (omp reads a one-line value as a file): such a value is a path, not

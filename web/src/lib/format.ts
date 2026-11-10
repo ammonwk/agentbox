@@ -121,7 +121,7 @@ export function clamp(n: number, lo: number, hi: number): number {
 }
 
 /** Yellow from a tenth of the machine, red from half of it, wherever a CPU
- *  figure shows (Ammon's thresholds, 11-06). */
+ *  figure shows (Ammon's thresholds). */
 export function cpuTone(pct: number): "warn" | "bad" | undefined {
   // On the figure as shown: 49.7 reads "50%" and must be red.
   const shown = Math.round(pct);

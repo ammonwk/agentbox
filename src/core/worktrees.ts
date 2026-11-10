@@ -24,8 +24,8 @@ import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdic
 /**
  * Disk reclaim for worktrees.
  *
- * Closing a session no longer removes its checkout — the branch is what makes a
- * session resumable, and destroying a gigabyte of disk was too blunt a price
+ * Closing a session does not remove its checkout — the branch is what makes a
+ * session resumable, and destroying a gigabyte of disk is too blunt a price
  * for "take this off my board". The disk still has to come back somehow, so it
  * comes back here: a deliberate, explicitly-invoked sweep the human reads
  * before running, and, where the human turned it on, the same safe set removed
@@ -129,10 +129,10 @@ interface WorktreeFacts {
  *
  * Time is what widens the safe set. A worktree nothing has touched for
  * `STALE_DAYS` goes whatever is in it, and after `MINOR_DIRT_DAYS` untracked
- * files stop holding one back: left to "dirty means keep", two in five
- * worktrees on this machine were kept forever by an agent's probe scripts and
- * notes, long after their PR merged. Nothing is saved first. What is lost is
- * what nobody came back for, and the session's transcript still has most of it.
+ * files stop holding one back: left to "dirty means keep", worktrees would be
+ * kept forever by an agent's probe scripts and notes, long after their PR
+ * merged. Nothing is saved first. What is lost is what nobody came back for,
+ * and the session's transcript still has most of it.
  * Anything unreadable, unanswerable or in use lands on the cautious side.
  */
 const STALE_DAYS = 7;
@@ -356,9 +356,8 @@ export async function scanWorktrees(
 
   // Anything under the worktree root that no repo claimed above. These are the
   // leftovers of a deregistered repo or a pruned registration, and they are
-  // invisible to `git worktree list` by definition — on this machine they were
-  // over half of what agentbox had on disk. A reclaim that could not see them
-  // would report success while the bulk of the waste stayed put.
+  // invisible to `git worktree list` by definition. A reclaim that could not
+  // see them would report success while the bulk of the waste stayed put.
   for (const path of orphanDirs(seen)) {
     const session = byPath.get(path) ?? null;
     candidates.push({

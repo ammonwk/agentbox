@@ -11,10 +11,9 @@
  * rounding error it is and keeps the heavy models off a crowded account.
  *
  * The anchors are burn ratios with one of them measured: a placed Opus
- * session's first stretch of work has averaged 1.2 weekly points here (most
- * use far less, a few many times more), and the rest keep
- * their ratio to it. They are not API prices — subscriptions do not bill per
- * token — but they follow the published prices where those are known (Fable
+ * session's first stretch of work is taken as 1.2 weekly points, and the
+ * rest keep their ratio to it. They are not API prices — subscriptions do not
+ * bill per token — but they follow the published prices where those are known (Fable
  * 2.5× Opus 5.5, Opus 1.5× Sonnet 5, Astra 2.5× Sol, Sol 2.5× Luna, per
  * models.dev) and the user's sense of the rest: a GLM-5.3-Flash session is
  * worth about a seventh of a Fable one. Effort multiplies: low half, high the

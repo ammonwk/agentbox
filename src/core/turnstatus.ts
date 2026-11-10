@@ -10,7 +10,7 @@ const LINE_MAX = 2000;
 /** What a session's record keeps of its last message: its end, and all of its
  *  last line. A `STATUS:` line the cut began inside would read as no status at
  *  all, so nothing holds the session and the board shows no ask, and asks run
- *  long: in the 14 days to 11-01, 17 of about 58 passed 300 characters. */
+ *  long. */
 export function messageTail(text: string): string {
   const t = text.trim();
   if (t.length <= TAIL) return t;

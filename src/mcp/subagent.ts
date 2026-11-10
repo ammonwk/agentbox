@@ -44,10 +44,10 @@ import {
 /**
  * Block until the agent is done. There is no way to ask for less.
  *
- * This used to be a default with a `timeout_seconds` beside it, including a 0
- * that returned a receipt and left the agent running. That parameter is gone,
- * because every value it could take was worse than blocking — and the reason
- * is worth writing down, since it is a fact about the client and not about us.
+ * A `timeout_seconds` parameter, including a 0 that returns a receipt and
+ * leaves the agent running, would be worse than blocking at every value — and
+ * the reason is worth writing down, since it is a fact about the client and
+ * not about us.
  *
  * Claude Code races each MCP tool call against a 120-second timer
  * (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`). If the call settles first it is
@@ -62,8 +62,8 @@ import {
  * answers early has hung up. Returning a handle after 200ms does not start a
  * background task, it prevents one — the work goes on inside this process with
  * no way left to reach the caller, and the caller has to remember to come back
- * for an answer nothing will remind it about. That mistake cost five hours
- * once. So: block, and let the client do the thing it is already good at.
+ * for an answer nothing will remind it about. So: block, and let the client
+ * do the thing it is already good at.
  *
  * Two client limits bound the block. The per-call hard timeout
  * (`MCP_TOOL_TIMEOUT`) defaults to about 28 hours, comfortably past this. The
@@ -118,12 +118,12 @@ const publishing = new Set<string>();
  * The notification half is skipped when the client did not ask for progress —
  * sending it unrequested is a protocol violation.
  *
- * The file half is now opt-in, and only the workflow asks for it. A single
+ * The file half is opt-in, and only the workflow asks for it. A single
  * agent's status line is published by the pool instead, for as long as the
- * *agent* lives rather than as long as the call does — the two used to be the
- * same thing and are not, since an agent whose caller stopped waiting is
- * exactly the one worth watching. A workflow keeps its own line because what
- * it has to say is about the fan-out, not about any one agent.
+ * *agent* lives rather than as long as the call does, since an agent whose
+ * caller stopped waiting is exactly the one worth watching. A workflow keeps
+ * its own line because what it has to say is about the fan-out, not about
+ * any one agent.
  */
 function publisher(
   label: string,
@@ -171,10 +171,10 @@ function publisher(
 /**
  * Narrate one agent's turn for as long as a call is blocked on it.
  *
- * `agent` and `send_message` block for up to an hour on a single agent process
- * and, until now, said nothing at all in the meantime — so a client showed a
- * spinner and a tool name, and a watcher could not tell a subagent reading
- * its way through a repository from one that died three minutes in. The
+ * `agent` and `send_message` block for up to an hour on a single agent process.
+ * Saying nothing in the meantime, a client shows a spinner and a tool name,
+ * and a watcher cannot tell a subagent reading its way through a repository
+ * from one that died three minutes in. The
  * agent already knows what it last did and when; this just says so, on a
  * clock, and stops when the caller stops waiting.
  */
@@ -392,11 +392,10 @@ export async function runSubagentMcp(): Promise<void> {
   /**
    * Where this server runs, resolved once at startup.
    *
-   * It is the default working directory for every agent, it is fixed for the
-   * life of the process, and until now the only place it appeared was a line on
-   * stderr that no model ever reads. A caller working in a worktree therefore
-   * had no way to discover that its agents were not. Naming it in the tool
-   * descriptions costs two `git` calls at boot and closes that gap for good.
+   * It is the default working directory for every agent and fixed for the
+   * life of the process, and a line on stderr is read by no model, so a caller
+   * working in a worktree has no other way to discover that its agents are
+   * not. Naming it in the tool descriptions costs two `git` calls at boot.
    */
   const HERE = describePlace(process.cwd());
 

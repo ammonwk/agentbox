@@ -63,10 +63,10 @@ export function skillRoots(repoDirs: string[] = []): SkillRoot[] {
  *
  * Block scalars are the point of this function. A long `description:` is
  * conventionally written folded, and reading only the rest of the key's line
- * captures the *indicator* rather than the value: 9 of 11 skills on this
- * machine rendered a bare `>` or `|` in Settings, with the prose beneath it
- * discarded. A real YAML parser is far more surface than one field needs, so
- * this handles the subset that actually appears and nothing else.
+ * captures the *indicator* rather than the value: Settings would render a
+ * bare `>` or `|`, with the prose beneath it discarded. A real YAML parser is
+ * far more surface than one field needs, so this handles the subset that
+ * actually appears and nothing else.
  */
 function parseFrontmatter(text: string): {
   name?: string;
@@ -149,8 +149,7 @@ export interface SkillScan {
  * Every SKILL.md under the known roots.
  *
  * This walks the filesystem and reads every file it finds, so it belongs to
- * the cold refresh only — it was previously recomputed on every 400ms
- * broadcast.
+ * the cold refresh only, never the 400ms broadcast.
  */
 export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   const skills: SkillInfo[] = [];
@@ -200,11 +199,10 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   // listing it twice makes this read as two skills when an agent will only ever
   // resolve one.
   //
-  // These are not always copies of each other: on this machine `go-for-it` and
-  // `vibed` differ between roots by more than a kilobyte, and `vibed`'s two
-  // descriptions describe visibly different behaviour. So the winner is not
-  // arbitrary and the precedence has to match omp's, which `skillRoots()` now does
-  // and cites. The surviving entry keeps its own `source` and `path`, so the UI
+  // These are not always copies of each other: one skill's copies in two roots
+  // can describe visibly different behaviour. So the winner is not arbitrary
+  // and the precedence has to match omp's, which `skillRoots()` does and
+  // cites. The surviving entry keeps its own `source` and `path`, so the UI
   // still says truthfully which copy won.
   //
   // A repo's own skill shadows a global one only inside that repo, so repo

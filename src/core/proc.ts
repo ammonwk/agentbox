@@ -17,19 +17,18 @@ import type { LoadSample, ProcDetail, ProcRole } from "./types";
  * terminal of yours.
  *
  * ── On cost ────────────────────────────────────────────────────────────────
- * Reading /proc/<pid>/stat for every process on the machine is 16-37ms for the
- * ~670 processes on a working laptop, which is affordable on a 2s poll.
+ * Reading /proc/<pid>/stat for every process on the machine is cheap enough
+ * for a 2s poll.
  *
- * Reading /proc/<pid>/smaps_rollup is not: 11ms for a small process and 147ms
- * for one holding a 4.6 GiB heap, because the kernel walks every VMA. That is
- * why memory has its own slow lane — see metrics.ts.
+ * Reading /proc/<pid>/smaps_rollup is not: it grows with the process's heap,
+ * because the kernel walks every VMA. That is why memory has its own slow
+ * lane — see metrics.ts.
  *
  * ── On which memory number ─────────────────────────────────────────────────
  * Summing RSS across a subtree is wrong, and the error is large rather than
- * academic: a measured agent read 776 MiB by RSS and 537 MiB by PSS. Node and
- * bun processes share their binary and libraries, a fork shares its parent's
- * heap until it writes, and RSS charges every shared page in full to every
- * process holding it.
+ * academic: Node and bun processes share their binary and libraries, a fork
+ * shares its parent's heap until it writes, and RSS charges every shared page
+ * in full to every process holding it.
  *
  * PSS divides each shared page by the number of processes sharing it, so a
  * subtree sum is meaningful. It is the number to show. RSS is kept only as the

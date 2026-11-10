@@ -1,11 +1,10 @@
 /** Transcript readers' positions, kept across restarts.
  *
  * Every reader holds a fold over its whole file — tokens, rate-limit hits,
- * the offset of every record — and a new server used to rebuild all of them
- * from byte 0: a week of transcripts is gigabytes, most of a minute of CPU
- * before the board could show anything. Each reader's `saveState` goes to a
- * file of its own here, and the next server's reader takes it up and reads
- * only what was appended since.
+ * the offset of every record — and rebuilding all of them from byte 0 at
+ * each start reads gigabytes before the board can show anything. Each
+ * reader's `saveState` goes to a file of its own here, and the next server's
+ * reader takes it up and reads only what was appended since.
  *
  * Nothing of the conversation is kept: offsets and the fold's counters and
  * last-seen values, which the transcript remains the record of. A saved state

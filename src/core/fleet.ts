@@ -848,11 +848,10 @@ export class Fleet extends EventEmitter {
 
   /** Is the limit this session stopped at its model's on every account, not
    *  its account's? Another account's session on the same model stopped at
-   *  one within minutes of it. Moving it would only meet the limit again
-   *  (the free model's 429 on 2026-10-21), so it waits out `until` where it is.
-   *  Never when its account's usage shows a window spent: that is the limit,
-   *  and two accounts running dry together is a busy morning, not the model
-   *  (2026-11-09, two Claude accounts' weekly limits two seconds apart). */
+   *  one within minutes of it. Moving it would only meet the limit again, so
+   *  it waits out `until` where it is. Never when its account's usage shows a
+   *  window spent: that is the limit, and two accounts running dry together is
+   *  a busy morning, not the model. */
   private modelWide(v: Session, now: number): boolean {
     const model = v.model?.split(":")[0];
     if (!model || this.spentUntil(v.accountId, v.limitHit!, now) !== null) return false;
@@ -1092,13 +1091,10 @@ export class Fleet extends EventEmitter {
    * was redeemed at the provider, or the plan grew); else, where no window
    * ever accounted for the hit (a rate limit, an empty balance, an account
    * whose usage cannot be read), the wait or the time the message itself
-   * names, "lifted" once that has passed, null when it names none. On
-   * 2026-10-21 33 omp sessions stopped on a free model's 429 "retry-after-ms=
-   * 8060000" sat for good after it cleared at 18:00. The message's time
-   * is never held against usage that has moved on: on 2026-10-11 a codex
-   * account's weekly reset was redeemed nine minutes after two sessions
-   * stopped on it, usage read 0%, and both were still refused every message
-   * "until Oct 17", the date their limit message named.
+   * names, "lifted" once that has passed, null when it names none, so a
+   * session never sits on after its limit cleared. The message's time is never
+   * held against usage that has moved on: a reset redeemed at the provider
+   * frees the session even while its limit message names a later date.
    */
   private limitEnd(accountId: string | null, hit: { at: number; detail: string; provider?: string }, now: number): number | "lifted" | null {
     const spent = this.spentUntil(accountId, hit, now);

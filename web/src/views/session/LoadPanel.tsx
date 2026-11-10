@@ -18,8 +18,8 @@ import { cpuTone, fmtDur } from "../../lib/format";
 
 /**
  * CPU as a share of the whole machine, 0-100%, everywhere: "this session is a
- * quarter of the box" is what the number is read for. Ammon asked for it on
- * 11-06 over htop's per-core 1,400%, which made every reading a division.
+ * quarter of the box" is what the number is read for. Ammon asked for it
+ * over htop's per-core 1,400%, which made every reading a division.
  */
 function cpuText(pct: number): string {
   if (pct >= 10) return `${Math.round(pct)}%`;

@@ -66,10 +66,9 @@ const CLOSE_FINISHED_MS = 60 * 60_000;
  * nothing said to it that it has not answered yet (`saidAt`), and its turn
  * did not end on something it needs from you. A finished one a schedule
  * started closes itself (`closeFinished`), and a red schedule's last session
- * owns the streak until it is finished: 10-24 one that ended its turn on a
- * wait for staging's CD counted as idle, and three more were started for the
- * same failure; 10-25 the nightly release, resumed to be told its run had
- * concluded, was closed before it got to that turn.
+ * owns the streak until it is finished: one that ended its turn on a wait is
+ * not idle, or more are started for the same failure, and one resumed to be
+ * told its run concluded is not closed before it gets to that turn.
  */
 function finished(s: Session, claims: ReadonlyMap<string, unknown>): boolean {
   if (s.closedAt !== null || s.status === "closed") return true;

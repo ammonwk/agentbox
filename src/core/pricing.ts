@@ -43,8 +43,8 @@ const TABLE: [RegExp, Price][] = [
 const FALLBACK = p(1.25, 10, 0.125, 1.25);
 
 /** A provider's free model (OpenCode's "-free", OpenRouter's ":free") is
- *  charged to no plan, so it costs nothing: priced as any other, Go accounts
- *  ran $5,700 of one on 2026-10-21 with their 5-hour windows at 0%. */
+ *  charged to no plan, so it costs nothing: priced as any other, it would
+ *  read as large spending while the account's windows never move. */
 export const isFree = (model: string | null | undefined): boolean => /[-:]free\b/.test((model ?? "").toLowerCase());
 
 const FREE = p(0, 0, 0, 0);

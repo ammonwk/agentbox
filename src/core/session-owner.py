@@ -35,8 +35,8 @@ def watch(pid, born, scope, dependencies):
 
 
 def arm(pid, dependencies=()):
-    # tmux asks systemd to move a new pane into its scope while the pane already runs; on a loaded box (11-09, load 330)
-    # the move landed after this read, the launch refused and the session died 2s in. Wait for it.
+    # tmux asks systemd to move a new pane into its scope while the pane already runs; on a loaded box the move can
+    # land after this read, and the launch would refuse and the session die. Wait for it.
     deadline = time.monotonic() + 15
     while not re.fullmatch(r'(?:tmux-spawn|agentbox-command)-[a-f0-9-]+\.scope',
                            scope := Path(f'/proc/{pid}/cgroup').read_text().strip().split('/')[-1]):

@@ -7,12 +7,12 @@ import { mkdirSync } from "node:fs";
  * Every path derived from `AGENTBOX_HOME` is resolved at CALL time, not at
  * import time.
  *
- * These used to be `export const`, which read `process.env` once when the
- * module was first imported. Import order then decided where the app wrote: a
- * test setting `AGENTBOX_HOME` — in `beforeAll` or even at its own module scope
- * — was already too late if any earlier file had pulled paths.ts in, and the
- * override silently did nothing. The suite wrote sessions and worktrees into
- * the developer's live `~/.local/share/agentbox` while passing.
+ * An `export const` would read `process.env` once when the module was first
+ * imported, and import order would decide where the app wrote: a test setting
+ * `AGENTBOX_HOME` — in `beforeAll` or even at its own module scope — would be
+ * too late if any earlier file had pulled paths.ts in, and the suite would
+ * write sessions and worktrees into the developer's live
+ * `~/.local/share/agentbox` while passing.
  *
  * Reading the env on each call is a string join. It is not worth caching, and a
  * cache would reintroduce exactly the staleness this removes.

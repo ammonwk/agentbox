@@ -1,11 +1,10 @@
 /** Parking: stopping sessions nobody is using, and what counts as "using".
  *
- * An idle agent process is not free. Measured on this machine with 82 Claude
- * processes idle: 1–2% of a core each (the allocator's scavenger and GC
- * threads, plus a once-a-second poll of the worktree's git HEAD and
- * `.claude.json`) and ~240 MB each — 1.4 cores and 19.6 GB between them; 64
- * idle omp sessions held ~29 GB with their MCP servers. After `parkIdleMin`
- * the prompt cache is cold anyway, so keeping the process costs that and buys
+ * An idle agent process is not free: it keeps using CPU (the allocator's
+ * scavenger and GC threads, plus a once-a-second poll of the worktree's git
+ * HEAD and `.claude.json`) and holds hundreds of MB, more with its MCP
+ * servers, and a fleet of them adds up to cores and gigabytes. After
+ * `parkIdleMin` the prompt cache is cold anyway, so keeping the process costs that and buys
  * nothing: the fleet stops it (`Fleet.parkIdle`), the board keeps showing it
  * as waiting on you, and the next message — from the web, the CLI or the
  * fleet MCP — resumes it with that message as the prompt.
@@ -21,20 +20,18 @@
  * as holds they would keep a session up until the machine reboots. Followers
  * and endless loops hold nothing; servers hold for `SERVICE_GRACE_MS`, since
  * you may be using one in a browser. Everything else is work and holds for as
- * long as it uses any CPU at all: the first dry run found three `--prod`
- * repair scripts twenty hours in under a session silent for thirteen, and a
- * slow command costing 2% of a core is cheap next to killing one of those. One
- * whose processes have not used a single clock tick in `STUCK_WORK_MS` is hung,
- * not slow: xyiskn7f's `_owed57-observe.ts --prod` stopped writing its log on
- * 2026-10-10 and held its finished session up for six and a half days.
+ * long as it uses any CPU at all: a `--prod` repair script can run for hours
+ * under a silent session, and a slow command costing a sliver of a core is
+ * cheap next to killing one of those. One whose processes have not used a
+ * single clock tick in `STUCK_WORK_MS` is hung, not slow, and would otherwise
+ * hold its finished session up for days.
  *
  * A session whose turn ended `STATUS: done` (the last line the fleet's rules
  * ask every turn to end on) is parked after `DONE_IDLE_MS` rather than
- * `parkIdleMin`, warm cache or not. Of 1,303 such turns from 2026-10-10 to
- * 10-17, 69% were never followed by another and 5% by real work (a push, a
- * merge, a production run), mostly a steward finding on a PR already
- * landed; a cold resume for those costs less than a process each for the
- * other 95%. A session you pinned is the exception (an extension pins the
+ * `parkIdleMin`, warm cache or not: such a turn is rarely followed by real
+ * work (a push, a merge, a production run), so a cold resume for the few that
+ * are costs less than a process each for the rest. A session you pinned is
+ * the exception (an extension pins the
  * conversation it keeps): its next message is coming, and keeping its cache
  * warm is the point.
  *

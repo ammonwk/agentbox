@@ -156,7 +156,7 @@ function networkError(err: unknown, what: string): Reading {
  * `five_hour` and `seven_day` are the account-wide windows; per-model weekly
  * caps arrive as `limits[kind=weekly_scoped]` named by
  * `scope.model.display_name`. `seven_day_opus`/`seven_day_sonnet` are the
- * legacy per-model buckets (null since mid-2026) and are used only when no
+ * legacy per-model buckets (left null) and are used only when no
  * scoped limit names the same model. `is_active` is ignored: it marks the one
  * limit currently binding, not which limits exist.
  */

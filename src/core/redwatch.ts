@@ -47,8 +47,8 @@ const RUNS_READ = 30;
  * The red streak the workflow is in, or null when it is green or every red run
  * in it finished before the session started at `startedAt`. A red run that
  * finished after it needs a session once that one is finished (the scheduler
- * waits until then): 10-23 staging's candidate went red again a day after
- * its session ended, with no green run between, and nobody was started.
+ * waits until then), or a workflow that goes red again after its session
+ * ended, with no green run between, starts nobody.
  */
 export function redStreak(runs: WorkflowRun[], startedAt: number | null): RedStreak | null {
   const settled = runs

@@ -235,17 +235,16 @@ interface OmpProc {
  *     (`AGENTBOX_SESSION` in its environment), once agentbox has matched that
  *     session to its file: omp opens its file only some way into its first
  *     turn, and until then siblings started beside it in one checkout read
- *     alike to the newest-file guess, which handed nine omp sessions started
- *     in four seconds each other's ids, so a session's own `agentbox pr
- *     claim` was refused as held by itself;
+ *     alike to the newest-file guess, which can hand siblings started
+ *     together each other's ids, so a session's own `agentbox pr claim` is
+ *     refused as held by itself;
  *  3. `-r <id|path>` in argv;
  *  4. for one agentbox started with a prompt (`promptOf`), the file in its
  *     cwd's slug dir, born after it started, whose first prompt holds that
  *     prompt. omp writes nothing until its first answer, so a slow start
- *     has no file for a while, and the newest-file guess below handed it a
- *     sibling's born later in the same checkout (sihfi7cr, 10-28, given a
- *     brief written twenty minutes after it started); until its own
- *     appears it has none;
+ *     has no file for a while, and the newest-file guess below would hand it
+ *     a sibling's born later in the same checkout; until its own appears it
+ *     has none;
  *  5. for one started without a prompt (in your own terminal), the newest
  *     such file not already claimed.
  */
@@ -922,11 +921,10 @@ export const ompAdapter: ProviderAdapter = {
   // in the conversation instead of the words. The fleet types it.
   promptDelivery: "typed",
 
-  // Measured 2026-10-19 on OpenCode Go: a session stopped and resumed read
-  // 43,136 of 43,325 input tokens from cache on its first call. An idle omp
-  // holds ~450 MB and ~1% of a core; a resume costs ~5 CPU-seconds. A resume
-  // after the briefing or rules changed misses (the system prompt is rebuilt),
-  // which they do a few times a week.
+  // On OpenCode Go a session stopped and resumed reads nearly all its input
+  // from cache on its first call, while an idle omp holds hundreds of MB and
+  // some CPU. A resume after the briefing or rules changed misses (the system
+  // prompt is rebuilt).
   parkIdleMs: 10 * 60_000,
 
   modelContextLimit: (model) => ompContextLimit(agentDir(), model),

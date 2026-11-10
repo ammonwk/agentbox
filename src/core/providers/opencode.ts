@@ -73,7 +73,7 @@ let idCounter = 0;
  * creation time times 4096 plus a counter, bit-inverted to 48 bits so newer
  * sorts first, in hex, then 14 random base62 characters. The counter starts
  * at 1, as opencode's does: OpenCode Zen refuses its free models to a session
- * whose id has 0 there ("Free usage limit reached", measured 2026-11-04).
+ * whose id has 0 there ("Free usage limit reached").
  */
 function newSessionId(now = Date.now()): string {
   if (now !== lastIdMs) {

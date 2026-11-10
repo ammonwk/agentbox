@@ -4,7 +4,7 @@
 import type { Repo, Session } from "./types";
 
 /** An explicit session → project (repo id, or null for none) association a
- *  caller knows and the checkout cannot say. None is passed today. */
+ *  caller knows and the checkout cannot say. */
 export type ProjectBindings = ReadonlyMap<string, string | null>;
 
 /**

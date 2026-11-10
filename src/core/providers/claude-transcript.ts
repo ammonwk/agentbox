@@ -7,8 +7,7 @@
  * One transcript line is one record. An assistant *message* is split across
  * several lines — one per content block (thinking, text, tool_use), each with
  * its own `uuid` but the same `message.id` and, crucially, the same `usage`.
- * Summing usage per line double- or triple-counts every message; half the
- * assistant lines on this machine are such repeats.
+ * Summing usage per line double- or triple-counts every message.
  */
 
 import { basename, dirname, sep } from "node:path";

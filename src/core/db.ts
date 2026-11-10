@@ -804,9 +804,8 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
  * that pane, on the pending row's account. The discovered row's account is
  * not compared: where every account reads one store (omp, opencode),
  * discovery files each transcript under the first account, so it differs from
- * the pending row's whenever the spawn went elsewhere (b2aqsdct, 11-09, whose
- * timeline never left "Starting omp…"). One transaction, so a crash leaves
- * one of the two, not both. */
+ * the pending row's whenever the spawn went elsewhere. One transaction, so a
+ * crash leaves one of the two, not both. */
 export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, now: number): boolean {
   const pending = getSessionRecord(pendingId), discovered = getSessionRecord(discoveredId);
   if (!pending || !discovered || pending.agentSessionId || pending.origin !== "agentbox" || !pending.tmux || pending.archivedAt || pending.successor ||

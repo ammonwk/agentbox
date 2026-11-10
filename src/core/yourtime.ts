@@ -42,15 +42,11 @@
  *  for work of your own, and a fleet that costs you less should not read as
  *  you doing less.
  *
- *  Eight minutes for the gap, measured: the spacing between one thing you
- *  gave and the next (the two weeks to 2026-10-23, about 870 of them) is two
- *  kinds mixed. Replies inside a sitting come fast and thin out (207 under a
- *  minute, 46 at four, 21 at eight, 11 at nine); returns spread over hours,
- *  an exponential fitted to the 15–90 minute spacings, about seven a minute
- *  at the short end. The first is above the second up to eight minutes and
- *  gone by ten, so a gap of eight or less is more likely you stayed than
- *  you came back. Over those two weeks a gap of three minutes would have
- *  made 1,103 minutes, five 1,299, eight 1,646, fifteen 2,304.
+ *  Eight minutes for the gap: the spacing between one thing you gave and
+ *  the next is two kinds mixed. Replies inside a sitting come fast and thin
+ *  out; returns spread over hours. The first outnumbers the second up to
+ *  about eight minutes, so a gap of eight or less is more likely you stayed
+ *  than you came back.
  */
 
 import { getDb } from "./db";

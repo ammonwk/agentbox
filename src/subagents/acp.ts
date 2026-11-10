@@ -44,7 +44,7 @@ export interface AcpEvents {
   onToolStart: (sessionId: string, call: ToolCall) => void;
   /**
    * A still-running tool call moved, and the move is worth a transcript
-   * event — today only subagent progress snapshots qualify. Ordinary tool
+   * event — only subagent progress snapshots qualify. Ordinary tool
    * chatter stays off the wire; only the terminal update is recorded.
    */
   onToolUpdate: (sessionId: string, call: ToolCall) => void;

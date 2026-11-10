@@ -1,13 +1,13 @@
 /**
  * What a session is waiting on, and the one way it finds out.
  *
- * A session used to wait with whatever it could write: a background shell
- * loop over `gh`, `gh run watch`, a `pidwait` and a message, a monitor. Each
- * lived in the session's own process tree, so it died when the session was
- * parked, moved or restarted, and each had ways to end that said nothing: a
- * loop whose two conditions were never true in the same poll and whose
- * timeout printed the line success prints; a waker killed with the shell that
- * started it; a job stopped with the idle session that owned it.
+ * A wait a session writes itself — a background shell loop over `gh`,
+ * `gh run watch`, a `pidwait` and a message, a monitor — lives in the
+ * session's own process tree, so it dies when the session is parked, moved or
+ * restarted, and each has ways to end that say nothing: a loop whose two
+ * conditions are never true in the same poll and whose timeout prints the
+ * line success prints; a waker killed with the shell that started it; a job
+ * stopped with the idle session that owned it.
  *
  * A wait here is a row the server owns. The server looks (every pull request
  * in one GraphQL request, a run by a conditional GET, a job by its unit, a

@@ -46,9 +46,9 @@ const str = (v: string | true | undefined): string | undefined => (typeof v === 
 
 /** The session this command runs in, or null from a terminal of your own:
  *  what "you" means in what the CLI prints. A session reads its own id like
- *  anyone else's, so every line that names the caller says so in words;
- *  j2g254q4 read "#8154 is j2g254q4's" as another session's claim and left
- *  four pull requests it held with nobody on them. */
+ *  anyone else's, so every line that names the caller says so in words, or a
+ *  session reading its own id as another's leaves the pull requests it holds
+ *  with nobody on them. */
 export async function me(api: Api): Promise<string | null> {
   return process.env.AGENTBOX_SESSION || (await api<{ id: string | null }>("POST", "/api/whoami", { callerPid: process.pid })).id;
 }
@@ -158,7 +158,7 @@ function clock(at: number): string {
 export async function ls(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["status", "idle", "repo", "provider"], ["all", "roots", "q", "json"]);
   if (rest.length) throw new Error(`unexpected argument "${rest[0]}" (filters are options: --repo, --status, …)`);
-  // "archived" is what closed used to be called.
+  // "archived" is accepted as another name for closed.
   const statuses = oneOf("status", str(flags.get("status"))?.split(",").map((x) => (x === "archived" ? "closed" : x)), STATUSES);
   const idle = str(flags.get("idle")) ? idleTest(str(flags.get("idle"))!) : null;
   const repo = str(flags.get("repo"))?.toLowerCase();

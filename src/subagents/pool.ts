@@ -119,11 +119,10 @@ const DEFAULT_TIMING: PoolTiming = {
 /**
  * Wall clock for one turn.
  *
- * A workflow has a deadline and an agent count; a bare agent had neither, and
- * `timeout_seconds` never was one — it bounded how long the *caller* waited,
- * not how long the agent ran. That is how a single turn once ran for 8,729
- * seconds and $3.71 against the wrong repository with nothing to stop it: the
- * call it was launched from had returned two hours earlier.
+ * A workflow has a deadline and an agent count; a bare agent has neither, and
+ * how long the *caller* waits does not bound how long the agent runs: a turn
+ * can run on against the wrong repository with nothing to stop it, hours
+ * after the call it was launched from returned.
  *
  * Four hours is far above any turn that is going well and far below the cost
  * of one that is not. It ends the turn rather than the agent: the partial
@@ -1618,9 +1617,9 @@ const ESCALATE_CONFIRMS = 2;
  *
  * There is no way to push into a calling model's context -- the only channel
  * is the answer to a question it asked. This blocked call *is* that channel,
- * held open, and until now it was spent entirely on waiting: an agent could
- * repeat the same failing command for the rest of its four-hour clock and the
- * caller would learn about it at the end.
+ * held open, and spent entirely on waiting it would let an agent repeat the
+ * same failing command for the rest of its four-hour clock while the caller
+ * learns about it at the end.
  *
  * So the wait polls. Nearly always it hands back a turn and nothing else
  * happens. When the agent looks genuinely stuck -- and `escalate` is
@@ -1768,8 +1767,8 @@ export class SubagentPool {
       this.timing,
     );
     // Registered BEFORE the await, not after. Two same-name spawns in one
-    // message both used to pass the name check during the first one's launch;
-    // the second's set() then overwrote the first, leaving a live agent process
+    // message would both pass the name check during the first one's launch;
+    // the second's set() would overwrite the first, leaving a live agent process
     // addressable by nothing. Registering synchronously makes the collision
     // check and the claim atomic; a failed launch releases the claim below —
     // but only if this agent still holds it, so a slow failure cannot evict
@@ -1817,7 +1816,7 @@ export class SubagentPool {
    * Without it the newest state on disk is whatever the ticker managed up to
    * two seconds before the end -- which says "running", and goes stale, and a
    * reader cannot tell an agent that finished cleanly from one whose process
-   * was killed. Those are opposite facts and they were rendering identically.
+   * was killed. Those are opposite facts.
    */
   private seal(agent: Subagent): void {
     try {
@@ -1832,11 +1831,10 @@ export class SubagentPool {
   /**
    * Publish one status line per agent, for as long as the agent exists.
    *
-   * Tied to the agent's life and not to the call that started it, which is the
-   * whole change. The MCP layer publishes while a call is blocked; that covers
-   * the ordinary case and misses the one that matters, because an agent whose
-   * caller stopped waiting is precisely the agent nobody is watching. It used
-   * to disappear from the status line at the moment it became worth seeing.
+   * Tied to the agent's life and not to the call that started it. The MCP
+   * layer publishes while a call is blocked; that covers the ordinary case and
+   * misses the one that matters, because an agent whose caller stopped waiting
+   * is precisely the agent nobody is watching.
    *
    * An uncollected answer keeps its row for the same reason: from outside the
    * client, this file is the only place it is visible at all.
