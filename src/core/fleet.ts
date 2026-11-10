@@ -4346,6 +4346,7 @@ export class Fleet extends EventEmitter {
       updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
       // An MFA grant ends with the session (`agent-aws.ts`).
       dropAgentAws(sid);
+      this.emit("closed", sid);
     }
     await this.tick();
     const dropped = family.flatMap((sid) => held.get(sid) ?? []);

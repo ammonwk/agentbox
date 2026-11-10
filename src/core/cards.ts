@@ -25,9 +25,10 @@
  * been parked, the ask becomes a card (`carryAsks`): one per session, which a
  * later ask of the same session rewrites. It closes the moment you say anything
  * to the session (`Fleet` "yours": typed, `agentbox send` at your terminal, a
- * card's answer typed in), when the session closes, and when its next turn ends
- * on no ask. A session with a card of its own open (the steward's, `card add`)
- * gets none: that one already asks.
+ * card's answer typed in) and when its next turn ends on no ask; it is deleted
+ * when the session closes, since closing it was your answer. A session with a
+ * card of its own open (the steward's, `card add`) gets none: that one already
+ * asks.
  *
  * Cards are the user's, not a conversation, so they live in the database.
  * A decision's default and its time are the asker's to act on; agentbox only
@@ -170,6 +171,7 @@ export class Cards {
     const rows = getDb().query(`SELECT * FROM cards WHERE state = 'answered' AND answer <> '' AND delivered_at IS NULL AND tried_at IS NULL`).all() as Row[];
     for (const r of rows) this.deliverLater(r.id, Math.max(0, (r.answered_at ?? 0) + UNDO_MS - this.now()));
     this.fleet.on("yours", (id: string) => this.closeAsk(id, "you answered it in the conversation"));
+    this.fleet.on("closed", (id: string) => this.dropAsk(id));
     setInterval(() => void this.carryAsks().catch((e) => console.error("agentbox: asks:", e)), ASK_CHECK_MS).unref?.();
   }
 
@@ -179,6 +181,12 @@ export class Cards {
       `UPDATE cards SET state = 'closed', closed_why = ?, answered_at = ?, undo = NULL WHERE session_id = ? AND key LIKE '${ASK_KEY}%' AND state IN ('open','later')`,
       [why, this.now(), sessionId],
     );
+    if (changes) this.changed();
+  }
+
+  /** Delete the card a session's ask became, if one is still to be answered. */
+  private dropAsk(sessionId: string): void {
+    const { changes } = getDb().run(`DELETE FROM cards WHERE session_id = ? AND key LIKE '${ASK_KEY}%' AND state IN ('open','later')`, [sessionId]);
     if (changes) this.changed();
   }
 
@@ -200,7 +208,7 @@ export class Cards {
       } catch {
         s = { closedAt: now } as Session;
       }
-      if (s.closedAt !== null) this.closeAsk(id, "the session closed");
+      if (s.closedAt !== null) this.dropAsk(id);
       else if (covered.has(id)) this.closeAsk(id, "the session asked with a card of its own");
       // Mid-turn, or told something it has not answered yet: the ask stands until that turn ends.
       else if ((s.status !== "waiting" && s.status !== "stopped") || (s.saidAt !== null && s.saidAt > s.lastActivityAt)) continue;
@@ -289,7 +297,7 @@ export class Cards {
     if (this.pushTimer) return;
     this.pushTimer = setTimeout(() => {
       this.pushTimer = null;
-      const batch = this.pushing.filter((c) => this.row(c.id).state === "open");
+      const batch = this.pushing.filter((c) => (getDb().query("SELECT state FROM cards WHERE id = ?").get(c.id) as Pick<Row, "state"> | null)?.state === "open");
       this.pushing = [];
       if (batch.length) this.push(batch);
     }, PUSH_BATCH_MS);
