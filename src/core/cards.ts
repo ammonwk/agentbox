@@ -20,6 +20,15 @@
  * successor (`agentbox handover`) gives it its cards (`moveCards`), as it does
  * its children.
  *
+ * A session can also ask by ending its turn `STATUS: needs …`, which only
+ * someone opening the conversation reads. Once such a turn has sat an hour and
+ * been parked, the ask becomes a card (`carryAsks`): one per session, which a
+ * later ask of the same session rewrites. It closes the moment you say anything
+ * to the session (`Fleet` "yours": typed, `agentbox send` at your terminal, a
+ * card's answer typed in), when the session closes, and when its next turn ends
+ * on no ask. A session with a card of its own open (the steward's, `card add`)
+ * gets none: that one already asks.
+ *
  * Cards are the user's, not a conversation, so they live in the database.
  * A decision's default and its time are the asker's to act on; agentbox only
  * shows that the time has passed.
@@ -27,7 +36,8 @@
 
 import { getDb } from "./db";
 import { FleetError, type Fleet } from "./fleet";
-import type { Card, CardKind, CardState } from "./types";
+import { turnStatus } from "./turnstatus";
+import type { Card, CardKind, CardState, Session } from "./types";
 
 export const CARD_KINDS: readonly CardKind[] = ["decision", "merged", "note"];
 /** How long an answer waits before it is typed into the session: the undo. */
@@ -39,6 +49,14 @@ const DONE_SHOWN = 200;
 const TITLE_MAX = 200;
 const SHORT_MAX = 1200;
 const LONG_MAX = 200_000;
+/** A turn that ended `STATUS: needs …` this long ago, parked, nobody having said anything since: the ask becomes a
+ *  card. In the 7 days to 11-09 you answered 74% of such asks in the conversation within the hour, 84% within two. */
+const ASK_AFTER_MS = 60 * 60_000;
+/** One older than this is history (its work moved on, or you chose to leave it), not a new question. */
+const ASK_WITHIN_MS = 24 * 60 * 60_000;
+const ASK_CHECK_MS = 60_000;
+/** The start of the key of a card `carryAsks` made. */
+const ASK_KEY = "needs:";
 
 type Row = {
   id: number; kind: CardKind; title: string; short: string; long: string | null; pr: string | null; options: string | null; recommend: string | null;
@@ -115,6 +133,25 @@ export function openAsks(): Map<string, string[]> {
   return out;
 }
 
+/** The card the ask a session's last turn ended on (`STATUS: needs …`) makes;
+ *  null when it ended on none. Its `lastMessage` is only the end of the
+ *  message: the words above the line are for the caller to put in `long`. */
+function askOf(s: Session): NewCard | null {
+  const status = turnStatus(s.lastMessage);
+  if (status?.kind !== "needs") return null;
+  const ask = status.text.replace(/^needs\s+\S+[\s—:–-]*/i, "") || status.text;
+  return {
+    kind: "decision",
+    title: /^.*?[?.](?=\s|$)/.exec(ask)?.[0] ?? ask,
+    short: ask,
+    recommend: /[^.;?!—]*\brecommend\b[^.;?!]*/i.exec(ask)?.[0]?.trim() ?? null,
+    // The turn's: once you have said something to the session, only its next turn asks again.
+    key: `${ASK_KEY}${s.id}:${s.lastActivityAt}`,
+    sessionId: s.id,
+    about: s.id,
+  };
+}
+
 export class Cards {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pushing: Card[] = [];
@@ -132,6 +169,60 @@ export class Cards {
   start(): void {
     const rows = getDb().query(`SELECT * FROM cards WHERE state = 'answered' AND answer <> '' AND delivered_at IS NULL AND tried_at IS NULL`).all() as Row[];
     for (const r of rows) this.deliverLater(r.id, Math.max(0, (r.answered_at ?? 0) + UNDO_MS - this.now()));
+    this.fleet.on("yours", (id: string) => this.closeAsk(id, "you answered it in the conversation"));
+    setInterval(() => void this.carryAsks().catch((e) => console.error("agentbox: asks:", e)), ASK_CHECK_MS).unref?.();
+  }
+
+  /** Close the card a session's ask became, if one is open. */
+  private closeAsk(sessionId: string, why: string): void {
+    const { changes } = getDb().run(
+      `UPDATE cards SET state = 'closed', closed_why = ?, answered_at = ?, undo = NULL WHERE session_id = ? AND key LIKE '${ASK_KEY}%' AND state IN ('open','later')`,
+      [why, this.now(), sessionId],
+    );
+    if (changes) this.changed();
+  }
+
+  /** A card for each ask left in a conversation an hour, kept to the session's latest ask, and closed once it has none. */
+  private async carryAsks(): Promise<void> {
+    const rows = getDb().query(`SELECT id, key, short, session_id, about FROM cards WHERE kind = 'decision' AND state IN ('open','later')`).all() as Pick<Row, "id" | "key" | "short" | "session_id" | "about">[];
+    const asks = new Map(rows.filter((r) => r.key?.startsWith(ASK_KEY)).map((r) => [r.session_id!, r]));
+    const covered = new Set(rows.filter((r) => !r.key?.startsWith(ASK_KEY)).flatMap((r) => [r.session_id, r.about]));
+    const said = async (s: Session) => {
+      const page = await this.fleet.timeline(s.id, null, 5).catch(() => null);
+      const last = page?.events.filter((e) => e.kind === "assistant").at(-1);
+      return last?.kind === "assistant" ? last.text.slice(0, LONG_MAX) : null;
+    };
+    const now = this.now();
+    for (const [id, card] of asks) {
+      let s: Session;
+      try {
+        s = this.fleet.get(id);
+      } catch {
+        s = { closedAt: now } as Session;
+      }
+      if (s.closedAt !== null) this.closeAsk(id, "the session closed");
+      else if (covered.has(id)) this.closeAsk(id, "the session asked with a card of its own");
+      // Mid-turn, or told something it has not answered yet: the ask stands until that turn ends.
+      else if ((s.status !== "waiting" && s.status !== "stopped") || (s.saidAt !== null && s.saidAt > s.lastActivityAt)) continue;
+      else {
+        const ask = askOf(s);
+        if (!ask) this.closeAsk(id, "its next turn ended without asking");
+        else if (ask.short.trim().slice(0, SHORT_MAX) !== card.short) {
+          getDb().run(`UPDATE OR IGNORE cards SET title = ?, short = ?, long = ?, recommend = ?, key = ? WHERE id = ?`, [
+            ask.title.trim().slice(0, TITLE_MAX), ask.short.trim().slice(0, SHORT_MAX), await said(s), ask.recommend ?? null, ask.key!, card.id,
+          ]);
+          this.changed();
+        }
+      }
+    }
+    for (const s of this.fleet.sessions()) {
+      if (asks.has(s.id) || covered.has(s.id) || s.closedAt !== null || s.parkedAt === null || s.subagent || s.quiet) continue;
+      const age = now - s.lastActivityAt;
+      if (age < ASK_AFTER_MS || age > ASK_WITHIN_MS || (s.saidAt !== null && s.saidAt > s.lastActivityAt)) continue;
+      const ask = askOf(s);
+      if (!ask || getDb().query("SELECT 1 FROM cards WHERE key = ?").get(ask.key!)) continue;
+      this.add({ ...ask, long: await said(s) });
+    }
   }
 
   private row(id: number): Row {

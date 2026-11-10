@@ -1014,7 +1014,10 @@ const router = new Router(mapError)
       const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
       // Signed as an agent's, but typed at your own terminal.
-      if (!fromSession && byYou(req, b)) recordYourAct("message", sent.to);
+      if (!fromSession && byYou(req, b)) {
+        recordYourAct("message", sent.to);
+        fleet.emit("yours", sent.to);
+      }
       return json(sent);
     }
     if (b.sendId !== undefined) {

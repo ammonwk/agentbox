@@ -3244,7 +3244,11 @@ export class Fleet extends EventEmitter {
   }
 
   resume(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
-    return this.serial(id, () => this.resumeNow(id, prompt, attempt));
+    return this.serial(id, async () => {
+      const s = await this.resumeNow(id, prompt, attempt);
+      this.said(id, prompt);
+      return s;
+    });
   }
 
   private async resumeNow(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
@@ -3673,7 +3677,14 @@ export class Fleet extends EventEmitter {
   send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
       if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
+      this.said(id, text);
     });
+  }
+
+  /** Something you said reached the session (yours, not an agent's, an
+   *  extension's or agentbox's own): `yours`, which closes the card its ask became. */
+  private said(id: string, text: string | undefined): void {
+    if (text && !isAgentSent(text)) this.emit("yours", id);
   }
 
   /** Type into the session on the account it is on, however cold: the
