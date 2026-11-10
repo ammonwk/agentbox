@@ -880,7 +880,8 @@ const router = new Router(mapError)
         ? { session: await fleet.spawnFirstWithRoom([asked, ...others.map((p) => ({ ...asked, provider: p, model: undefined, effort: undefined, accountId: null }))]) }
         : await fleet.spawn(asked);
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
-      if (byYou(req, b)) recordYourAct("launch", out.session.id);
+      // An extension's conversation is its line to you: what you say there is yours, as in a session you started.
+      if (byYou(req, b) || b.conversation === true) recordYourAct("launch", out.session.id);
       scheduleHot();
       scheduleCold();
       return json(out, 201);

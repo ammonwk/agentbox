@@ -39,7 +39,7 @@
  *  `minutes` is all of it; `asks` is the same fold over what the fleet
  *  asked of you: cards, MFA codes, logins, and your messages to sessions you
  *  did not start. The rest is you using the fleet, in sessions you started
- *  for work of your own, and a fleet that costs you less should not read as
+ *  for work of your own or an extension's conversation with you, and a fleet that costs you less should not read as
  *  you doing less.
  *
  *  Eight minutes for the gap: the spacing between one thing you gave and
@@ -154,7 +154,8 @@ function messageAct(raw: string, at: number, yours: boolean): YourAct | null {
 }
 
 /** Something agentbox saw you do as it happened, that no transcript or card
- *  records: `launch` is a session you started, so its first message is yours. */
+ *  records: `launch` is a session you started, or one carrying an extension's
+ *  conversation with you, whose first message is signed as the extension's. */
 export type RecordedAct = "launch" | "message" | "login";
 
 export function recordYourAct(kind: RecordedAct, sessionId: string | null, at = Date.now()): void {

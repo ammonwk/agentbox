@@ -231,7 +231,9 @@ the predecessor held goes to it (`agentbox handover`), and the idle
 predecessor is closed. An idle, large one whose prompt cache is about to go
 cold is asked once to write that handoff while it costs a short turn. The
 session is pinned, so it is not parked the moment its turn ends, and you
-talk to it on the Sessions page like any other.
+talk to it on the Sessions page like any other; it counts as a session you
+started, so what you say to it is not the fleet asking of you (docs/v2.md,
+Your time).
 
 From TypeScript, `conversation({start, instructions, freshOver, state})`;
 from any other language, the same as a command configured by a

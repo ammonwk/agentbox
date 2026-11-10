@@ -118,7 +118,7 @@ export function conversation(opts: Options) {
           ? `[you take over from ${last.id}, this conversation until now (${over}).${handoff ? ` It left you this handoff:\n\n${handoff}\n\n` : " "}What it did is in \`agentbox log ${last.id} | tail -60\`; it will not be spoken to again.]\n\n`
           : "";
         const instructions = opts.instructions ? `${readFileSync(opts.instructions, "utf8").trim()}\n\n---\n\n` : "";
-        const s = await agentbox.start({ ...opts.start, prompt: `${instructions}${follows}[via agentbox ext ${me.name}] ${text}` });
+        const s = await agentbox.start({ ...opts.start, conversation: true, prompt: `[via agentbox ext ${me.name}] ${instructions}${follows}${text}` });
         await agentbox.pin(s.id);
         write({ main: s.id, previous: last ? [last.id, ...st.previous.filter((x) => x !== last.id)].slice(0, 200) : st.previous });
         if (last) {

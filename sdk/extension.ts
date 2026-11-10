@@ -90,6 +90,8 @@ export type Start = {
   readOnly?: boolean;
   /** False: its stops are not pushed to the phone; your page shows them instead. */
   notify?: boolean;
+  /** It carries the extension's conversation with you (`sdk/conversation.ts`), so it counts as one you started. */
+  conversation?: boolean;
 };
 
 /** The parts of the API extensions use most, by name. Anything else: `call`. */
