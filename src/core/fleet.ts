@@ -741,7 +741,7 @@ export class Fleet extends EventEmitter {
     // A frozen session looks hung and idle: nothing is parked or nudged
     // while the fleet is paused (pause.ts).
     const paused = pausedSince() !== null;
-    if (paused) holdPaused();
+    if (paused) await holdPaused();
     else await this.parkIdle(now, settings.parkIdleMin);
     // What acts on a session's transcript waits for every one to be read.
     if (this.caughtUp && !paused) {
@@ -2116,7 +2116,7 @@ export class Fleet extends EventEmitter {
   }
 
   /** Pause or resume every agent (pause.ts). */
-  setPaused(on: boolean): number | null {
+  setPaused(on: boolean): Promise<number | null> {
     // Every quiet stretch a resumed session shows was the pause's: give it
     // the startup grace before parking reads one as idle.
     if (!on) this.nextParkCheck = Math.max(this.nextParkCheck, this.now() + PARK_STARTUP_MS);

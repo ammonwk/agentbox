@@ -23,6 +23,14 @@
  * a failed batch. Systemd's own `FreezerState` does not see it; nothing here
  * reads that.
  *
+ * Where there is no such slice (macOS, or Linux without a user systemd) the
+ * same is done by signal: every process under agentbox's tmux server gets
+ * SIGSTOP, and SIGCONT to resume, except each pane's own process. tmux
+ * continues the process group of a pane whose process stops, which would undo
+ * the pause at once; and what is left running is mostly the agent waiting on
+ * what it ran. What escapes that tree (a `wait job`, which launchd runs on
+ * macOS) runs on.
+ *
  * Pausing is a state, not a one-off sweep: what starts while paused (a
  * session launched, a scheduled one, a command a thawing agent was about to
  * run) is frozen on the fleet's next tick, and the state outlives a restart of
@@ -34,6 +42,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getKv, setKv } from "./db";
 import { tmuxSocket } from "./paths";
+import { readProcTable, subtree } from "./proc";
 
 const KEY = "pausedSince";
 
@@ -48,16 +57,22 @@ export function pausedSince(): number | null {
 }
 
 /** Pause or resume every agent. Returns the new state. */
-export function setPaused(on: boolean): number | null {
+export async function setPaused(on: boolean): Promise<number | null> {
   since = on ? (pausedSince() ?? Date.now()) : null;
   setKv(KEY, since);
-  freezeAll(on);
+  await freezeAll(on);
   return since;
 }
 
 /** While paused, freeze what started since the last pass. */
-export function holdPaused(): void {
-  if (pausedSince() !== null) freezeAll(true);
+export async function holdPaused(): Promise<void> {
+  if (pausedSince() !== null) await freezeAll(true);
+}
+
+async function freezeAll(on: boolean): Promise<void> {
+  const slice = appSlice();
+  if (slice) freezeUnits(slice, on);
+  else await signalTree(on);
 }
 
 /** The user's `app.slice`, the parent of the server's own unit. */
@@ -92,9 +107,7 @@ function isAgentWork(dir: string, unit: string): boolean {
   return true;
 }
 
-function freezeAll(on: boolean): void {
-  const slice = appSlice();
-  if (!slice) return;
+function freezeUnits(slice: string, on: boolean): void {
   const want = on ? "1" : "0";
   for (const unit of readdirSync(slice)) {
     const file = join(slice, unit, "cgroup.freeze");
@@ -105,6 +118,25 @@ function freezeAll(on: boolean): void {
     if (!on && !AGENT_UNIT.test(unit)) continue;
     try {
       writeFileSync(file, want);
+    } catch {}
+  }
+}
+
+/** Stop or continue everything under agentbox's tmux server but the panes'
+ *  own processes. */
+async function signalTree(on: boolean): Promise<void> {
+  const ask = Bun.spawnSync(["tmux", "-L", tmuxSocket(), "display-message", "-p", "#{pid}"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const server = Number(ask.stdout.toString().trim());
+  if (!server) return;
+  const table = await readProcTable();
+  const panes = new Set(table.children.get(server) ?? []);
+  for (const r of subtree(table, server)) {
+    if (r.pid === server || panes.has(r.pid)) continue;
+    // A stopped process shows "T" where the state is known (Linux): skip the
+    // signal it already has.
+    if (on && r.state === "T") continue;
+    try {
+      process.kill(r.pid, on ? "SIGSTOP" : "SIGCONT");
     } catch {}
   }
 }

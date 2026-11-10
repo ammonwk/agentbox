@@ -1212,7 +1212,7 @@ const router = new Router(mapError)
   .add("POST", "/api/pause", async ({ req }) => {
     const b = await readBody(req);
     if (typeof b.paused !== "boolean") throw new HttpError(400, "paused: true to pause every agent, false to resume them");
-    const since = fleet.setPaused(b.paused);
+    const since = await fleet.setPaused(b.paused);
     console.log(`agentbox: ${b.paused ? "paused" : "resumed"} every agent`);
     return json({ paused: since });
   })
