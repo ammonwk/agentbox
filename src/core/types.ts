@@ -70,39 +70,49 @@ export interface UsageWindow {
   provider?: string;
 }
 
-/** One Codex usage-limit reset you can spend: the CLI's `/usage` menu's "Full
- *  reset". Spending one clears the account's spent windows so sessions stopped
- *  at the limit can carry on. */
+/** A usage-limit reset you can spend: Codex's "Full reset" in its `/usage`
+ *  menu, or one of Claude's limit resets (`/limit-reset`: "Fable reset",
+ *  "Weekly reset", …). Spending one clears what it covers at once, so sessions
+ *  stopped at the limit can carry on. */
 export interface ResetCredit {
   id: string;
-  /** "codex_rate_limits" today; kept as a string for whatever comes next. */
+  /** Codex: "codex_rate_limits". Claude: the reset's kind, "session",
+   *  "weekly", "fable" or "full". */
   resetType: string;
   status: "available" | "redeeming" | "redeemed" | "unknown";
   /** Epoch ms the provider granted it. */
   grantedAt: number | null;
   /** Epoch ms it stops being usable; null means it does not expire. */
   expiresAt: number | null;
-  /** The provider's own words for it: "Full reset". */
+  /** What it is called: "Full reset", "Fable reset". */
   title: string | null;
+  /** The provider's own words for it. */
   description: string | null;
+  /** How many of it are left; one when absent. A Claude grant can hold several. */
+  count?: number;
+  /** Why it cannot be spent right now, when the provider says so ("can't be
+   *  used while the weekly limit is spent"). Claude only: its answer is a gate. */
+  blocked?: string | null;
 }
 
-/** Codex usage-limit resets you have left. Codex only. */
+/** Usage-limit resets you have left. Codex and Claude. */
 export interface ResetCredits {
   /** How many are left to spend, spent or not. */
   availableCount: number;
   /** Of those, how many the provider says apply to a window that is at its
-   *  limit right now. It is advice, not a gate: a credit can be spent when
+   *  limit right now. Codex: advice, not a gate — a credit can be spent when
    *  this is zero (observed: `applicable_available_count: 0`, consume still
-   *  cleared the window), so the UI offers the button on `availableCount`. */
+   *  cleared the window), so the UI offers the button on `availableCount`.
+   *  Claude: how many it would let you spend now. */
   applicableCount: number | null;
-  /** The credits themselves, newest first, when the details endpoint answered.
-   *  Empty when only the count is known. */
+  /** The credits themselves, the one to spend first leading, when the provider
+   *  listed them. Empty when only the count is known. */
   credits: ResetCredit[];
 }
 
-/** What spending a reset did, as the provider worded it. */
-export type ResetOutcome = "reset" | "nothing-to-reset" | "no-credit" | "already-redeemed" | "unknown";
+/** What spending a reset did, as the provider worded it. "unavailable" is
+ *  Claude declining for now (cooling down, not eligible). */
+export type ResetOutcome = "reset" | "nothing-to-reset" | "no-credit" | "already-redeemed" | "unavailable" | "unknown";
 
 export interface ResetConsumeResult {
   outcome: ResetOutcome;
@@ -138,8 +148,8 @@ export interface AccountUsage {
   /** Codex: the account's credit balance and its recent spend. Absent for
    *  every other provider. */
   credits?: CreditBalance | null;
-  /** Codex: usage-limit resets left to spend (docs/v2.md, Usage). Absent for
-   *  every other provider, and on readings that never carried one. */
+  /** Codex and Claude: usage-limit resets left to spend (docs/v2.md, Usage).
+   *  Absent for every other provider, and on readings that never carried one. */
   resets?: ResetCredits | null;
 }
 

@@ -7,7 +7,8 @@
  * Sources, freshest wins:
  * - claude: `GET /api/oauth/usage` every 3 min, plus the free copy the CLI
  *   itself caches in `.claude.json` (`cachedUsageUtilization`) whenever that
- *   file changes. A fresh cache pushes the next endpoint call back.
+ *   file changes. A fresh cache pushes the next endpoint call back. Only the
+ *   endpoint carries the account's limit resets.
  * - codex: `GET /backend-api/wham/usage` every 5 min, plus `ingestRollout`
  *   readings the fleet parses from rollout `token_count` events. A recent
  *   rollout reading likewise pushes the endpoint back.
@@ -57,7 +58,10 @@ const FETCH_TIMEOUT_MS = 15_000;
  *  calibration series has no holes that look like missing data. */
 const SAMPLE_EVERY_MS = HOUR;
 
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+/** `cedar_ember=1` adds the limit resets (`/limit-reset` in the CLI). The
+ *  server lists them only to a caller whose User-Agent is the CLI's. */
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
+const claudeResetUrl = (org: string) => `https://api.anthropic.com/api/organizations/${encodeURIComponent(org)}/reset_rate_limits`;
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CODEX_RESET_CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
@@ -213,6 +217,72 @@ function mapClaudeUsage(body: unknown): { windows: UsageWindow[]; notes: string[
   return { windows, notes };
 }
 
+/** A Claude reset's kind, as the CLI names it: one that hands back what Fable
+ *  used of the week is a Fable reset; otherwise the kind the server gives, or
+ *  what it clears. */
+function claudeResetKind(g: Record<string, unknown>, clears: string[]): string {
+  if (g.gives_back_weekly === true) return "fable";
+  if (g.type === "session" || g.type === "weekly" || g.type === "full") return g.type;
+  const five = clears.includes("five_hour");
+  const other = clears.some((c) => c !== "five_hour");
+  return five && !other ? "session" : other && !five ? "weekly" : "full";
+}
+
+const CLAUDE_RESET_TITLE: Record<string, string> = { session: "5-hour reset", weekly: "Weekly reset", fable: "Fable reset", full: "Full reset" };
+
+/** The server's `unavailable_reason`, as a reason a person reads. */
+function claudeResetBlocked(reason: unknown): string {
+  switch (reason) {
+    case "cooldown":
+      return "cooling down after the last reset";
+    case "blocked_five_hour":
+      return "can't be used while the 5-hour limit is spent";
+    case "blocked_seven_day":
+      return "can't be used while the weekly limit is spent";
+    case "blocked_opus":
+    case "blocked_sonnet":
+    case "blocked_other":
+      return "can't be used while another limit is spent";
+    case "cannot_clear":
+      return "nothing it refills is used yet";
+    case "needs_limit":
+      return "usable once you reach a limit";
+    default:
+      return "can't be used right now";
+  }
+}
+
+/** The `cedar_ember` block of `/api/oauth/usage?cedar_ember=1` → resets. Paused
+ *  and spent grants are left out; the grant the server would spend first
+ *  (`next_grant_id`) leads, then the soonest to expire. */
+function mapClaudeResets(block: unknown): ResetCredits | null {
+  const b = rec(block);
+  if (!b || b.eligible !== true || !Array.isArray(b.grants)) return null;
+  const credits: ResetCredit[] = [];
+  for (const raw of b.grants) {
+    const g = rec(raw);
+    const left = toNum(g?.resets_left);
+    if (!g || typeof g.id !== "string" || !g.id || g.paused === true || left === null || left < 1) continue;
+    const clears = Array.isArray(g.clears) ? g.clears.filter((c): c is string => typeof c === "string") : [];
+    const kind = claudeResetKind(g, clears);
+    credits.push({
+      id: g.id,
+      resetType: kind,
+      status: "available",
+      grantedAt: isoMs(g.starts_at),
+      expiresAt: isoMs(g.ends_at),
+      title: CLAUDE_RESET_TITLE[kind] ?? "Limit reset",
+      description: typeof g.label === "string" && g.label ? g.label : null,
+      count: Math.floor(left),
+      blocked: g.usable_now === true ? null : claudeResetBlocked(g.unavailable_reason),
+    });
+  }
+  const next = typeof b.next_grant_id === "string" ? b.next_grant_id : null;
+  credits.sort((x, y) => Number(y.id === next) - Number(x.id === next) || (x.expiresAt ?? Infinity) - (y.expiresAt ?? Infinity));
+  const sum = (list: ResetCredit[]) => list.reduce((n, c) => n + (c.count ?? 1), 0);
+  return { availableCount: sum(credits), applicableCount: sum(credits.filter((c) => !c.blocked)), credits };
+}
+
 function claudeUA(version: string | null): string {
   // The CLI's own format (`claude-cli/<v> (external, <entrypoint>)`); the
   // endpoint is not strict about it but a recognisable UA is the polite thing.
@@ -258,7 +328,64 @@ async function fetchClaudeUsage(account: Pick<Account, "home">, deps: UsageDeps)
   }
   const { windows, notes } = mapClaudeUsage(body);
   if (windows.length === 0) return { kind: "error", stale: "usage endpoint returned no windows" };
-  return { kind: "ok", at: deps.now(), windows, notes, source: "endpoint" };
+  return { kind: "ok", at: deps.now(), windows, notes, source: "endpoint", resets: mapClaudeResets(rec(body)?.cedar_ember) };
+}
+
+/**
+ * Spend one of a Claude account's limit resets — the CLI's `/limit-reset`.
+ * The request carries a fresh `request_id`, so a dropped answer cannot spend
+ * two.
+ */
+async function consumeClaudeReset(account: Pick<Account, "home" | "isDefault">, deps: UsageDeps, grantId: string): Promise<ResetConsumeResult> {
+  const cred = readClaudeCredentials(account.home);
+  if (!cred?.accessToken) throw new Error("this account is not logged in");
+  if (cred.expiresAt !== null && cred.expiresAt <= deps.now() + 30_000) {
+    throw new Error("the login's token has expired — it refreshes the next time this account runs, then try again");
+  }
+  const org = rec(readClaudeJson(claudeJsonPath(account))?.value?.oauthAccount)?.organizationUuid;
+  if (typeof org !== "string" || !org) throw new Error("this login names no organization, which a reset is spent from");
+  let res: Response;
+  try {
+    res = await deps.fetch(claudeResetUrl(org), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cred.accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": claudeUA(await deps.version("claude")),
+      },
+      body: JSON.stringify({ program: "cedar_ember", grant_id: grantId, request_id: randomUUID() }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const name = (err as Error)?.name;
+    throw new Error(name === "TimeoutError" || name === "AbortError" ? "the reset request timed out" : "could not reach the reset endpoint");
+  }
+  if (!res.ok) {
+    await res.arrayBuffer().catch(() => undefined);
+    if (res.status === 429) throw new Error("the reset was refused for now (rate limited) — nothing was used, try again in a minute");
+    if (res.status === 401 || res.status === 403) throw new Error("the reset was refused: this login cannot reset usage (it may have expired) — log in again");
+    throw new Error(`the reset was refused (HTTP ${res.status})`);
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error("the reset answer was not JSON");
+  }
+  const b = rec(body) ?? {};
+  const outcome: ResetOutcome =
+    b.result === "reset"
+      ? "reset"
+      : b.result === "not_limited"
+        ? "nothing-to-reset"
+        : b.result === "already_used"
+          ? "already-redeemed"
+          : b.result === "cooldown" || b.result === "ineligible" || b.result === "unavailable"
+            ? "unavailable"
+            : "unknown";
+  return { outcome, windowsReset: Array.isArray(b.cleared) ? b.cleared.length : 0 };
 }
 
 /**
@@ -843,16 +970,23 @@ export class UsageService extends EventEmitter {
   }
 
   /**
-   * Spend one of a codex account's usage-limit resets, then read the account
-   * again so the board, the balancer and every session stopped at the limit
-   * see that the window is no longer spent. The reading is taken whether or
-   * not the normal poll was due: the whole point is the immediate lift.
+   * Spend one of a codex or claude account's usage-limit resets, then read the
+   * account again so the board, the balancer and every session stopped at the
+   * limit see that the window is no longer spent. The reading is taken whether
+   * or not the normal poll was due: the whole point is the immediate lift.
+   * Claude spends a named grant: with none given, the one it would spend
+   * first, which the last reading put at the head of the list.
    */
   async consumeReset(accountId: string, creditId?: string | null): Promise<ResetConsumeResult> {
     const account = this.opts.accounts().find((a) => a.id === accountId);
     if (!account) throw new AccountError(404, `no account ${accountId}`);
-    if (account.provider !== "codex") throw new AccountError(400, `usage resets are a Codex feature; "${account.label}" is ${account.provider}`);
-    const result = await consumeCodexResetCredit(account, this.deps, creditId);
+    let result: ResetConsumeResult;
+    if (account.provider === "codex") result = await consumeCodexResetCredit(account, this.deps, creditId);
+    else if (account.provider === "claude") {
+      const grant = creditId ?? this.get(accountId).resets?.credits.find((c) => !c.blocked)?.id;
+      if (!grant) throw new AccountError(409, `none of "${account.label}"'s resets can be used right now`);
+      result = await consumeClaudeReset(account, this.deps, grant);
+    } else throw new AccountError(400, `usage resets are a Codex and Claude feature; "${account.label}" is ${account.provider}`);
     if (result.outcome === "reset") {
       // A reset that worked changed the numbers; take a fresh reading now.
       // A no-op (nothing to reset, no credit, already redeemed) leaves them.
@@ -971,8 +1105,8 @@ export class UsageService extends EventEmitter {
       stale: null,
       source: r.source,
       notes: r.notes,
-      // A rollout reading carries no reset credits: keep what the last
-      // endpoint reading found rather than forgetting them.
+      // A rollout or cache reading carries no reset credits: keep what the
+      // last endpoint reading found rather than forgetting them.
       resets: r.resets === undefined ? (cur.resets ?? null) : r.resets,
       credits: r.credits == null ? null : creditBalance(this.chatgptAccountOf(accountId), r.at, r.credits),
     };

@@ -402,7 +402,7 @@ function AccountCard({
         )}
       </div>
 
-      {a.provider === "codex" ? <ResetCreditsPanel account={a} /> : null}
+      {a.provider === "codex" || a.provider === "claude" ? <ResetCreditsPanel account={a} /> : null}
 
       <div className="ac-usage-foot">
         {a.usage.stale ? (
@@ -623,10 +623,10 @@ function creditsLine(c: CreditBalance): string {
 }
 
 /**
- * Codex hands out a few usage-limit resets, each spendable once: the CLI's
- * `/usage` menu shows how many and spends one. Here the count is part of the
- * account's usage, and you can spend one — the account is re-read straight
- * away, so sessions stopped at its limit are told to carry on.
+ * Codex and Claude hand out a few usage-limit resets, each spendable once: the
+ * CLIs' `/usage` and `/limit-reset` show them and spend one. Here they are
+ * part of the account's usage, and you can spend one — the account is re-read
+ * straight away, so sessions stopped at its limit are told to carry on.
  */
 function ResetCreditsPanel({ account: a }: { account: AccountView }) {
   const resets = a.usage.resets ?? null;
@@ -637,14 +637,18 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
   const now = useNow(60_000);
 
   if (!resets || resets.availableCount <= 0) return null;
+  const who = PROVIDER_LABEL[a.provider];
   const list = resets.credits.filter((c) => c.status === "available");
-  /** The provider's own "not needed right now" — it does not stop you
-   *  spending one, only says none of your windows is flagged as at its limit. */
-  const needed = resets.applicableCount !== 0;
-  const earliest = list.reduce<number | null>(
+  const usable = list.filter((c) => !c.blocked);
+  /** Claude says which it will spend now; with none, the button has nothing
+   *  to spend. Codex's own "not needed right now" stops nothing. */
+  const none = a.provider === "claude" && usable.length === 0;
+  const earliest = (none ? list : usable).reduce<number | null>(
     (m, c) => (c.expiresAt != null && (m == null || c.expiresAt < m) ? c.expiresAt : m),
     null,
   );
+  const expires = earliest != null ? ` · first expires in ${fmtCountdown(earliest - now)}` : "";
+  const kinds = list.length > 0 ? summarizeResets(list) : `${resets.availableCount} usage reset${resets.availableCount === 1 ? "" : "s"}`;
 
   const spend = () =>
     void run(async () => {
@@ -657,21 +661,19 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
     <div className="ac-resets">
       <Icon.bolt size={14} />
       <span className="ac-resets-text">
-        <strong>
-          {resets.availableCount} usage reset{resets.availableCount === 1 ? "" : "s"} available
-        </strong>
+        <strong>{kinds} available</strong>
         <span className="ac-resets-sub">
-          {needed
-            ? earliest != null
-              ? `Spend one to clear its limits now · expires in ${fmtCountdown(earliest - now)}`
-              : "Spend one to clear its limits now"
-            : "Codex says nothing needs resetting right now, but you can still spend one."}
+          {none
+            ? `None can be used right now: ${list[0]?.blocked ?? "Claude says so"}${expires}`
+            : resets.applicableCount === 0 && a.provider === "codex"
+              ? "Codex says nothing needs resetting right now, but you can still spend one."
+              : `Spend one to refill its limits now${expires}`}
         </span>
       </span>
       <Button
         size="sm"
-        disabled={busy}
-        title="Spend one reset on this account"
+        disabled={busy || none}
+        title={none ? "None of its resets can be used right now" : "Spend one reset on this account"}
         onClick={() => {
           setChosen("");
           setDone(null);
@@ -684,24 +686,22 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
       {error ? <p className="error-line">{error}</p> : null}
 
       {open ? (
-        <Modal
-          title={`Use a usage reset on ${a.label}?`}
-          hint="Clears its spent limits. Uses one credit."
-          onClose={() => setOpen(false)}
-        >
+        <Modal title={`Use a usage reset on ${a.label}?`} hint="Refills what it covers now. Uses one reset." onClose={() => setOpen(false)}>
           <div className="reset-choices">
             <label className="reset-choice">
               <input type="radio" name="reset-credit" checked={chosen === ""} onChange={() => setChosen("")} />
               <span>
-                <strong>Let Codex choose</strong>
+                <strong>Let {who} choose</strong>
               </span>
             </label>
             {list.map((c) => (
-              <label key={c.id} className="reset-choice">
-                <input type="radio" name="reset-credit" checked={chosen === c.id} onChange={() => setChosen(c.id)} />
+              <label key={c.id} className={`reset-choice${c.blocked ? " is-blocked" : ""}`}>
+                <input type="radio" name="reset-credit" disabled={!!c.blocked} checked={chosen === c.id} onChange={() => setChosen(c.id)} />
                 <span>
                   <strong>{c.title ?? "Usage reset"}</strong>
+                  {(c.count ?? 1) > 1 ? <span className="faint"> · {c.count} left</span> : null}
                   {c.expiresAt != null ? <span className="faint"> · expires in {fmtCountdown(c.expiresAt - now)}</span> : null}
+                  {c.blocked ? <span className="reset-desc">{c.blocked}</span> : null}
                   {c.description ? <span className="reset-desc">{c.description}</span> : null}
                 </span>
               </label>
@@ -719,6 +719,16 @@ function ResetCreditsPanel({ account: a }: { account: AccountView }) {
   );
 }
 
+/** "2 Fable resets, 1 Weekly reset": how many of each title, in list order. */
+function summarizeResets(list: { title: string | null; count?: number }[]): string {
+  const counts = new Map<string, number>();
+  for (const c of list) {
+    const t = c.title ?? "Usage reset";
+    counts.set(t, (counts.get(t) ?? 0) + (c.count ?? 1));
+  }
+  return [...counts].map(([t, n]) => `${n} ${n === 1 ? t : `${t}s`}`).join(", ");
+}
+
 /** What the provider's answer reads as, in the panel. */
 function resetOutcomeText(r: ResetConsumeResult): string {
   switch (r.outcome) {
@@ -730,6 +740,8 @@ function resetOutcomeText(r: ResetConsumeResult): string {
       return "No reset credit was available; nothing was used.";
     case "already-redeemed":
       return "That reset had already been used.";
+    case "unavailable":
+      return "The provider would not use a reset right now; nothing was used.";
     default:
       return "The provider returned an answer agentbox does not recognise.";
   }
