@@ -3009,7 +3009,10 @@ export class Fleet extends EventEmitter {
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, scope: Scope = getSettings().scope): Placement {
     const adapter = this.adapter(provider);
     const named = accountId && accountId !== "auto" ? getAccount(accountId) : null;
-    let asked = model || getSettings().models[provider] || null;
+    // A retired model is placed as its replacement, which another service
+    // may sell: placed as the old one, it lands on an account that does not
+    // run it, and is refused once that service's accounts are all walled.
+    let asked = unretired(model || getSettings().models[provider] || undefined) ?? null;
     // Pinned, unasked, to an account whose service does not sell the default:
     // it runs on that service's own default instead.
     const svc = named ? serviceOf(named) : null;
