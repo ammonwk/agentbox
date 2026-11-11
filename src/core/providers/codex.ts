@@ -714,11 +714,13 @@ const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function sessionFlags(opts: { session: string; cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
+function sessionFlags(opts: { account: Pick<Account, "isDefault" | "home">; session: string; cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
   if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
+  const model = flagValue(a, "-m", "--model");
+  if (model && !configs.some((x) => /(^|=)daybreak=/.test(x)) && !offersDaybreak(opts.account, model)) a.push("-c", "daybreak=false");
   if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.readOnly) a.push(...READ_ONLY);
   // Hook trust is kept by the path of the hooks.json, and each account's home
@@ -737,6 +739,30 @@ function sessionFlags(opts: { session: string; cwd: string; briefingFile?: strin
   // by a tool shell. Codex exec's ordinary originator is restored there.
   a.push("-c", 'shell_environment_policy.set.CODEX_INTERNAL_ORIGINATOR_OVERRIDE="codex_exec"');
   return a;
+}
+
+/** The last value `args` gives any of `flags`, alone or as `--flag=value`. */
+function flagValue(args: readonly string[], ...flags: string[]): string | undefined {
+  let v: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const x = args[i]!;
+    const attached = flags.find((f) => x.startsWith(`${f}=`));
+    if (flags.includes(x)) v = args[i + 1];
+    else if (attached) v = x.slice(attached.length + 1);
+  }
+  return v;
+}
+
+/** Daybreak (`daybreak = true` in config.toml) runs only on a model the
+ *  account's catalog offers it on; on any other model codex refuses the first
+ *  turn, and the TUI sits at the prompt with no transcript. */
+function offersDaybreak(account: Pick<Account, "isDefault" | "home">, model: string): boolean {
+  try {
+    const cache = JSON.parse(readFileSync(join(codexHome(account), "models_cache.json"), "utf8")) as { models?: { slug: string; available_access_programs?: { cyber?: string[] } }[] };
+    return !!cache.models?.find((m) => m.slug === model)?.available_access_programs?.cyber?.includes("daybreak_blue");
+  } catch {
+    return false;
+  }
 }
 
 /** Codex's own sandbox: it reads, and asks for nothing it could not do. Kept
