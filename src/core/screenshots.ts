@@ -86,7 +86,7 @@ export function screenshotImage(id: string) {
 
 // As a file URL: `shownImage` reads its argument as a link, where a `#` or
 // `%` in a screenshot's name would mean something else.
-const image = (path: string) => shownImage(pathToFileURL(path).href, null);
+const image = (path: string) => shownImage(pathToFileURL(path).href, []);
 
 function isImage(path: string): boolean {
   try {
