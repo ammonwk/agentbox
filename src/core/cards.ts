@@ -10,7 +10,8 @@
  * typed nowhere: forty merged cards must not wake their session forty times.
  *
  * The answer is held `UNDO_MS` before it is typed, so the last gesture can be
- * taken back; once typed it cannot. A session with a decision open holds it
+ * taken back, or less when the app stops offering the undo (`send`); once
+ * typed it cannot. A parked asker starts resuming the moment it is answered. A session with a decision open holds it
  * as it would a wait (`openAsks`): it may be parked, but it does not close
  * itself. Typed is not read: the answer is delivered once the asker has taken
  * a turn on it (`TAKEN`). Until then, and for good when the asker is gone, you
@@ -316,9 +317,32 @@ export class Cards {
     getDb().run(`UPDATE cards SET state = 'answered', answer = ?, answered_at = ?, tried_at = NULL, undo = ? WHERE id = ?`, [
       answer, at, JSON.stringify({ state: r.state === "answered" ? "open" : r.state, laterAt: r.later_at }), id,
     ]);
-    if (answer) this.deliverLater(id, UNDO_MS);
+    if (answer) {
+      this.deliverLater(id, UNDO_MS);
+      this.wake(r.session_id);
+    }
     this.changed();
     return this.get(id);
+  }
+
+  /** Type the answer now, its undo given up: the user left where they could take it back. */
+  async send(id: number): Promise<Card> {
+    await this.deliver(id, true);
+    return this.get(id);
+  }
+
+  /** Start resuming a parked or stopped asker while the answer waits out its
+   *  undo, so a short-lived answer (an MFA code) is not spent on its start. A
+   *  taken-back answer leaves it running idle, to be parked again. */
+  private wake(sessionId: string | null): void {
+    if (!sessionId) return;
+    try {
+      const s = this.fleet.get(sessionId);
+      if (s.host !== "none" || s.closedAt !== null) return;
+    } catch {
+      return;
+    }
+    this.fleet.resume(sessionId).catch((e) => console.error(`agentbox: waking ${sessionId} for its card's answer:`, (e as Error).message));
   }
 
   /** Keep it for later. */
@@ -369,11 +393,11 @@ export class Cards {
    *  the asker takes a turn on it (`TAKEN`). `closedAt`, not
    *  its status: a stopped child under a stopped parent reads "closed" on the
    *  board and is resumed like any parked session. */
-  private async deliver(id: number): Promise<void> {
+  private async deliver(id: number, now = false): Promise<void> {
     const r = this.row(id);
     if (r.state !== "answered" || !r.answer || r.delivered_at !== null || r.tried_at !== null) return;
     // Not before its undo has run out: an answer taken back and given again starts the wait over.
-    if (this.now() < (r.answered_at ?? 0) + UNDO_MS - 250) return;
+    if (!now && this.now() < (r.answered_at ?? 0) + UNDO_MS - 250) return;
     getDb().run(`UPDATE cards SET tried_at = ? WHERE id = ?`, [this.now(), id]);
     this.changed();
     if (!r.session_id) return;

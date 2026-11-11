@@ -25,6 +25,7 @@ const api = {
   answerCard: (id: number, text: string) => call<Card>("POST", `/api/cards/${id}/answer`, { text }),
   laterCard: (id: number) => call<Card>("POST", `/api/cards/${id}/later`),
   undoCard: (id: number) => call<Card>("POST", `/api/cards/${id}/undo`),
+  sendCard: (id: number) => call<Card>("POST", `/api/cards/${id}/send`),
   start: (body: { provider: string; cwd: string; prompt: string }) => call<{ session: Session }>("POST", "/api/sessions", body),
 };
 
@@ -111,7 +112,10 @@ export function Review({ state }: { state: AppState }) {
   const respond = useCallback((c: Card) => (c.kind === "decision" ? setAnswering(c) : setCatchingUp(true)), []);
   const [reading, setReading] = useState<Card | null>(null);
   const [leaving, setLeaving] = useState<{ id: number; to: "left" | "right" | "down" } | null>(null);
-  const [last, setLast] = useState<{ card: Card; what: "answered" | "approved" | "seen" | "later"; at: number } | null>(null);
+  /** The last gesture, while Undo is offered; `done` is true once the server has it. */
+  const [last, setLast] = useState<{ card: Card; what: "answered" | "approved" | "seen" | "later"; at: number; done: Promise<boolean> } | null>(null);
+  /** The card Undo was pressed on, whose answer must not then be sent. */
+  const undone = useRef<number | null>(null);
   /** Said for a moment when a gesture had nothing to do. */
   const [nothing, setNothing] = useState<string | null>(null);
   useEffect(() => {
@@ -133,6 +137,19 @@ export function Review({ state }: { state: AppState }) {
     return () => clearTimeout(t);
   }, [last]);
 
+  // An answer whose Undo goes away other than by pressing it (another gesture,
+  // leaving the page or the app) is sent then, not when the server's hold ends.
+  useEffect(() => {
+    if (!last || last.what === "later" || last.what === "seen") return;
+    const hide = () => document.visibilityState === "hidden" && setLast((l) => (l === last ? null : l));
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      document.removeEventListener("visibilitychange", hide);
+      if (undone.current === last.card.id) return;
+      void last.done.then((ok) => (ok ? api.sendCard(last.card.id) : null)).catch(() => {});
+    };
+  }, [last]);
+
   /** Do it: the card leaves in the gesture's direction, then is gone from the stack. True once the server has it. */
   const act = useCallback((card: Card, what: "answered" | "approved" | "seen" | "later", text = ""): Promise<boolean> => {
     setError(null);
@@ -149,8 +166,8 @@ export function Review({ state }: { state: AppState }) {
       },
       onStack ? 190 : 0,
     );
-    setLast({ card, what, at: Date.now() });
-    return (what === "later" ? api.laterCard(card.id) : api.answerCard(card.id, text)).then(
+    undone.current = null;
+    const done = (what === "later" ? api.laterCard(card.id) : api.answerCard(card.id, text)).then(
       () => true,
       (e: Error) => {
         setError(e.message);
@@ -163,11 +180,14 @@ export function Review({ state }: { state: AppState }) {
         return false;
       },
     );
+    setLast({ card, what, at: Date.now(), done });
+    return done;
   }, []);
 
   const undo = useCallback(() => {
     if (!last) return;
     const { card } = last;
+    undone.current = card.id;
     setLast(null);
     setError(null);
     setLocal((prev) => new Map(prev).set(card.id, { state: card.state, answer: null, answeredAt: null, laterAt: card.laterAt }));

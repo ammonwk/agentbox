@@ -1450,6 +1450,7 @@ const router = new Router(mapError)
     return json(cards.answer(cardId(params.id!), b.text));
   })
   .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/send", async ({ params }) => json(await cards.send(cardId(params.id!))))
   .add("POST", "/api/cards/:id/undo", ({ params }) => json(cards.undo(cardId(params.id!))))
   .add("POST", "/api/cards/:id/ack", ({ params }) => json(cards.ack(cardId(params.id!))))
   .add("POST", "/api/cards/:id/close", async ({ req, params }) => {

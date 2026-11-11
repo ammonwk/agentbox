@@ -3270,13 +3270,8 @@ export class Fleet extends EventEmitter {
     const view = this.get(id);
     if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "none" || (await this.paneAlive(rec.tmux))) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
-    // Its teammates were stopped with it and do not come back; say so, or it
-    // will message them and wait for answers that never come.
-    if (prompt && rec.parkedAt && rec.parkedMates?.length) {
-      prompt = `[agentbox: this session was parked while idle, and its teammates (${rec.parkedMates.join(", ")}) were stopped with it — they are no longer running.]\n\n${prompt}`;
-    }
-    // Parked by a crash rather than for idling: what it lost, before what you say.
-    if (prompt && rec.parkedAt && rec.parkedWhy) prompt = `[agentbox: ${rec.parkedWhy}]\n\n${prompt}`;
+    const note = parkedNote(rec);
+    if (prompt && note) prompt = `${note}\n\n${prompt}`;
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
@@ -3590,7 +3585,8 @@ export class Fleet extends EventEmitter {
     // what it was told about the PRs it lost has been said. A CLI the fleet
     // types is told when it is typed, and says it then.
     if (line) prReleaseTold(rec.id);
-    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
+    // Resumed with nothing to say, it keeps its parked note for the first thing typed into it.
+    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, ...(prompt ? { parkedMates: null, parkedWhy: null } : {}) });
     this.startedAt.set(rec.id, this.now());
     if (opts.promptFile) this.saidAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
@@ -3752,8 +3748,13 @@ export class Fleet extends EventEmitter {
     // What the session must read before it reads this: the PRs it lost, once
     // each. It is said here and not again: the next thing delivered to it
     // does not carry it.
-    const line = prReleaseLine(id);
-    const body = line ? (text ? `${line}\n\n${text}` : line) : text;
+    const rec = getSessionRecord(id);
+    const note = rec && parkedNote(rec);
+    const body = [prReleaseLine(id), note, text].filter(Boolean).join("\n\n");
+    const told = () => {
+      prReleaseTold(id);
+      if (note) updateSessionRecord(id, { parkedMates: null, parkedWhy: null });
+    };
     // Taken before it goes in: whatever the conversation writes on reading it is later.
     const at = this.now();
     try {
@@ -3764,10 +3765,10 @@ export class Fleet extends EventEmitter {
       if (!(e instanceof Unsubmitted)) throw e;
       // The text is a draft in the input box: it goes out with the next
       // message submitted, so it was said after all.
-      prReleaseTold(id);
+      told();
       throw new FleetError(409, `not sent: ${e.message}. Do not send it again before reading \`agentbox screen ${id}\`: a draft left in its input box goes out with the next message that is submitted.`);
     }
-    if (line) prReleaseTold(id);
+    told();
   }
 
   private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
@@ -4660,6 +4661,18 @@ function withoutModelFlag(args: readonly string[]): string[] {
     else if (eq < 0) i++; // its value is the next word
   }
   return out;
+}
+
+/** What a parked session reads before the next thing it is told: why it was
+ *  parked (a crash, a dialog it sat on), and the teammates stopped with it,
+ *  or it will message them and wait for answers that never come. */
+function parkedNote(rec: SessionRecord): string | null {
+  const lines: string[] = [];
+  if (rec.parkedWhy) lines.push(`[agentbox: ${rec.parkedWhy}]`);
+  if (rec.parkedMates?.length) {
+    lines.push(`[agentbox: this session was parked while idle, and its teammates (${rec.parkedMates.join(", ")}) were stopped with it — they are no longer running.]`);
+  }
+  return lines.join("\n\n") || null;
 }
 
 /** `resumeModel`, unless the session is on a retired model: its replacement.
