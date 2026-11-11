@@ -527,6 +527,11 @@ export interface ProviderAdapter {
    *  `LIMIT_DIALOG` is the one answer that is not a prompt for you. */
   blockedOn?(screen: string): string | null;
 
+  /** Given the visible terminal text, whether the CLI says its turn is still
+   *  going (a spinner, a retry countdown), for a CLI with no other way to
+   *  say so. Its transcript can end on an error it is already retrying. */
+  workingOn?(screen: string): boolean;
+
   /** The numbered menu `blockedOn` names, when the screen shows one: each
    *  option with the keys that choose it. Null for prompts that are not a
    *  menu (a permission question, a login). */

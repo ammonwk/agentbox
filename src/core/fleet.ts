@@ -2403,6 +2403,7 @@ export class Fleet extends EventEmitter {
           this.blocked.set(rec.id, proc.waitingOn);
         }
       }
+      if (status === "waiting" && host === "tmux" && adapter?.workingOn && pane && adapter.workingOn(this.settledScreen(pane) ?? "")) status = "running";
       if (host === "tmux" && adapter?.blockedOn && pane) {
         const quietFor = now - (f?.lastActivityAt ?? 0);
         // A prompt waiting on you stalls the transcript, so only look at the

@@ -1047,6 +1047,19 @@ export const ompAdapter: ProviderAdapter = {
     return null;
   },
 
+  // While the agent loop runs (a reply streaming, a tool, a retry's
+  // countdown, a compaction) omp docks a working row over the status bar:
+  // the interrupt key and what it is doing ("⎋ Working…"). The bar's
+  // spinner is no use: it keeps turning for background jobs after the turn
+  // is over. The row covers what the transcript cannot: omp writes a failed
+  // reply, then retries it, and says nothing more until the retry is done.
+  workingOn: (screen) =>
+    screen
+      .trimEnd()
+      .split("\n")
+      .slice(-4)
+      .some((line) => /^\s*(?:⎋|Esc) \S/.test(line)),
+
   answerStep: ompAskStep,
   pasteEnd: " ",
   carryOver: (argv, where) =>
