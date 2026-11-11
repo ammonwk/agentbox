@@ -289,15 +289,25 @@ function claudeUA(version: string | null): string {
   return `claude-cli/${version ?? "2.1.0"} (external, cli)`;
 }
 
-async function fetchClaudeUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
-  const cred = readClaudeCredentials(account.home);
+async function fetchClaudeUsage(account: Pick<Account, "home" | "isDefault">, deps: UsageDeps): Promise<Reading> {
+  let cred = readClaudeCredentials(account.home);
   if (!cred?.accessToken) return { kind: "skip", stale: "not logged in" };
   const now = deps.now();
-  // Refresh is the CLI's job. Calling with an expired token would only 401,
-  // and doing it every three minutes looks like abuse.
-  if (cred.expiresAt !== null && cred.expiresAt <= now + 30_000) {
-    return { kind: "skip", stale: "token expired — refreshes next time this account runs" };
+  const expired = () => cred!.expiresAt !== null && cred!.expiresAt <= now + 30_000;
+  // An idle account's access token runs out within a day and no session is
+  // there to refresh it, while its week keeps running: unread, it showed a
+  // week that had reset as spent. Refresh stays the CLI's job — `claude auth
+  // status` refreshes and rotates it, with no model call.
+  if (expired() && cred.hasRefreshToken) {
+    await deps.exec(["claude", "auth", "status"], {
+      ...(account.isDefault ? { unset: ["CLAUDE_CONFIG_DIR"] } : { env: { CLAUDE_CONFIG_DIR: account.home } }),
+      timeoutMs: 30_000,
+    });
+    cred = readClaudeCredentials(account.home);
+    if (!cred?.accessToken) return { kind: "skip", stale: "not logged in" };
   }
+  // Calling with an expired token would only 401.
+  if (expired()) return { kind: "skip", stale: "token expired and `claude auth status` could not refresh it" };
   // The usage endpoint needs user:profile. Tokens minted by
   // `claude setup-token` carry only user:inference; the CLI's own cache is
   // then the only source.

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { AccountView, Candidate, Placement } from "../../../../src/core/types";
 import { accountHue } from "../../bits";
 import { Icon, Spinner } from "../../components";
-import { fmtPts } from "../../lib/format";
-import { headlineWindows, noLimitOf, planOf, shortForecastHow, usageTone } from "../../lib/usage";
+import { fmtCountdown, fmtPts } from "../../lib/format";
+import { headlineWindows, noLimitOf, planOf, resetText, shortForecastHow, usageTone } from "../../lib/usage";
 import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
 
 /**
@@ -243,6 +243,8 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
   const auth = a.auth.state !== "ok" ? a.auth.state : null;
   const plan = planOf(a);
   const none = noLimitOf(a);
+  const now = Date.now();
+  const budgetReset = c?.budget ? c.budget.resetsAt : (weekly?.resetsAt ?? null);
   return (
     <span className="ns-acct-line" style={{ ["--acct" as string]: `var(--acct-${hue})` }}>
       <span className="acct-dot" aria-hidden="true" />
@@ -262,6 +264,12 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
         <MiniBar label={BUDGET_TAG[c.budget.label.toLowerCase()] ?? c.budget.label.toLowerCase()} used={c.budget.used} effective={c.budget.effective} />
       ) : (
         <MiniBar label="wk" used={weekly?.usedPct ?? null} effective={null} />
+      )}
+      {none || !budgetReset ? null : (
+        // When that limit resets: the balancer spends the soonest first.
+        <span className="ns-mbar-reset" title={resetText(budgetReset, now)}>
+          {budgetReset > now ? fmtCountdown(budgetReset - now) : "reset"}
+        </span>
       )}
     </span>
   );
