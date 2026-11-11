@@ -44,7 +44,7 @@ export function onEcho(fn: (e: Echo) => void, drop: (id: string) => void): () =>
 const norm = (s: string) => dropPasteTags(s).replace(/\s+/g, " ").trim().slice(0, 80);
 
 /** Whether the transcript now has the message an echo stands for. */
-export function landed(echo: Echo, users: readonly { text: string; at: number }[]): boolean {
+export function landed(echo: Pick<Echo, "text" | "at">, users: readonly { text: string; at: number }[]): boolean {
   const want = norm(echo.text);
   // Clocks: the transcript's timestamp is the agent's, a moment after ours.
   return users.some((u) => u.at >= echo.at - 10_000 && norm(u.text).startsWith(want.slice(0, 40)));

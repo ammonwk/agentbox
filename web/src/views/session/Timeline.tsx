@@ -12,6 +12,7 @@ import { AskRow, QuestionCard } from "./Question";
 import { anchoredScrollTop, distanceFromBottom, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { PendingActions, pendingNote, stuck, usePendingSends, useShowsPending } from "./submissions";
+import type { PendingSend } from "./drafts";
 import { MessageRail, useTurns } from "./MessageRail";
 import { onJump, takeJump } from "./jump";
 import { FindBar, useMarks } from "./Find";
@@ -31,7 +32,7 @@ type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
 const NO_TURNS: Turn[] = [];
 const NO_QUEUED: QueuedMessage[] = [];
-const NO_ECHOES: Echo[] = [];
+const NO_ON_THE_WAY: OnTheWay[] = [];
 /** A step still running after this long is flagged red. */
 const SLOW_MS = 120_000;
 /** A thinking block older than this is an idle gap, not a thought: no duration. */
@@ -161,13 +162,9 @@ export function Timeline({ session }: { session: Session }) {
   }, [events, board]);
   // Sent mid-turn and held by the agent until its current step yields.
   const queued = viewing || !atEnd ? NO_QUEUED : session.queued;
-  const sending = useEchoes(session.id, events, queued);
-  const echoes = viewing || !atEnd ? NO_ECHOES : sending;
+  const sending = useOnTheWay(session.id, events, queued);
+  const onTheWay = viewing || !atEnd ? NO_ON_THE_WAY : sending;
   useShowsPending(session.id);
-  // Sent from here and not yet received: a side question shows only once it
-  // waits on you, since its answer has a card of its own.
-  const allPending = usePendingSends(session.id);
-  const pending = useMemo(() => (viewing || !atEnd ? [] : allPending.filter((p) => p.kind !== "btw" || stuck(p))), [allPending, viewing, atEnd]);
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
   // the next step is written). The terminal shows the same state.
@@ -213,7 +210,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned, echoes.length, pending.length, queued.length, btw, thinking]);
+  }, [events, pinned, onTheWay.length, queued.length, btw, thinking]);
 
   // A question came up while you were at the tail (or the session opened on
   // one): show it from its top, which a card taller than the view would
@@ -617,24 +614,16 @@ export function Timeline({ session }: { session: Session }) {
           {queued.map((q, i) => (
             <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
           ))}
-          {[
-            ...echoes.map((e) => ({ at: e.at, el: (
-              <Bubble key={e.id} at={e.at} className="tl-echo" note="Sending…" title="The agent has not recorded it yet" copy={e.text}>
-                <Markdown text={e.text} />
+          {onTheWay.map(({ id, at, text, p }) => {
+            const { note, title } = p ? pendingNote(p) : { note: "Sending…", title: "The agent has not recorded it yet" };
+            // What went wrong reads first, then what to do about it.
+            const actions = p && stuck(p) ? <><span className="tl-me-note">{note}</span><PendingActions p={p} /></> : null;
+            return (
+              <Bubble key={id} at={at} className={actions ? "tl-unsent" : "tl-echo"} note={actions ? undefined : note} title={title} copy={text} actions={actions}>
+                <Markdown text={text} />
               </Bubble>
-            ) })),
-            ...pending.map((p) => {
-              const text = p.draft.text || "Resume session";
-              const { note, title } = pendingNote(p);
-              // What went wrong reads first, then what to do about it.
-              const actions = stuck(p) ? <><span className="tl-me-note">{note}</span><PendingActions p={p} /></> : null;
-              return { at: p.at, el: (
-                <Bubble key={p.id} at={p.at} className={stuck(p) ? "tl-unsent" : "tl-echo"} note={actions ? undefined : note} title={title} copy={text} actions={actions}>
-                  <Markdown text={text} />
-                </Bubble>
-              ) };
-            }),
-          ].sort((a, b) => a.at - b.at).map((x) => x.el)}
+            );
+          })}
           {thinking && session.background ? <ThinkingLive since={liveSince} now={now} background /> : null}
         </div>
         {!atEnd ? (
@@ -737,8 +726,16 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
 /** Who "you" are, for the picture beside your messages. */
 const Me = createContext<{ name: string; github: string }>({ name: "", github: "" });
 
-/** Messages sent from here that the transcript has not caught up with. */
-function useEchoes(sessionId: string, events: readonly TimelineEvent[], queued: readonly QueuedMessage[]): Echo[] {
+/** One message sent from here that the transcript has not caught up with:
+ *  `p` while agentbox has yet to confirm it, an echo after. */
+interface OnTheWay { id: string; at: number; text: string; p?: PendingSend }
+
+/** Each message sent from here once, until the transcript or the agent's
+ *  queue has it, whose row then stands in for it. The agent can record a
+ *  message before agentbox confirms it, and the echo that follows a
+ *  confirmation can come a render before its pending copy is gone. */
+function useOnTheWay(sessionId: string, events: readonly TimelineEvent[], queued: readonly QueuedMessage[]): OnTheWay[] {
+  const pending = usePendingSends(sessionId);
   const [sent, setSent] = useState<Echo[]>([]);
   useEffect(
     () =>
@@ -755,12 +752,18 @@ function useEchoes(sessionId: string, events: readonly TimelineEvent[], queued: 
     return () => clearInterval(t);
   }, [sent.length]);
   const users = useMemo(() => events.filter((e): e is Extract<TimelineEvent, { kind: "user" }> => e.kind === "user").slice(-20), [events]);
-  // In the agent's queue is as good as landed: the queued row stands in for it.
-  const live = sent.filter((e) => Date.now() - e.at < ECHO_TTL_MS && !landed(e, users) && !landed(e, queued));
+  const arrived = (m: { text: string; at: number }) => landed(m, users) || landed(m, queued);
+  const live = sent.filter((e) => Date.now() - e.at < ECHO_TTL_MS && !arrived(e));
   useEffect(() => {
     if (live.length !== sent.length) setSent(live);
   });
-  return live;
+  const waiting = new Set(pending.map((p) => p.id));
+  return [
+    // A side question shows only once it waits on you: its answer has a card.
+    ...pending.filter((p) => stuck(p) || (p.kind !== "btw" && !arrived({ text: p.body, at: p.at })))
+      .map((p) => ({ id: p.id, at: p.at, text: p.body || "Resume session", p })),
+    ...live.filter((e) => !waiting.has(e.id)),
+  ].sort((a, b) => a.at - b.at);
 }
 
 /** Ticks once a second while `active`, so live durations advance. */

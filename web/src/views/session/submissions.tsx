@@ -21,12 +21,28 @@ const RESEND_MS = 2 * 60_000;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function deliverPending(p: PendingSend): Promise<void> {
-  await beginSend(p);
-  await attempt(p);
+  // Out from before it is stored: a check that finds it stored with no
+  // receipt yet must not send it alongside.
+  active.add(p.id);
+  try {
+    await beginSend(p);
+    await submit(p);
+  } finally {
+    active.delete(p.id);
+  }
 }
 
 async function attempt(p: PendingSend): Promise<void> {
+  if (active.has(p.id)) return;
   active.add(p.id);
+  try {
+    await submit(p);
+  } finally {
+    active.delete(p.id);
+  }
+}
+
+async function submit(p: PendingSend): Promise<void> {
   try {
     await settle(p, await api.submit(p.sessionId, p.id, p.kind, p.body));
   } catch (e) {
@@ -34,8 +50,6 @@ async function attempt(p: PendingSend): Promise<void> {
     // receipt says what happened once agentbox answers. An answer that
     // refuses it came before any receipt.
     await updatePending(p.id, e instanceof Unreachable ? { error: message(e) } : { state: "failed", error: message(e) });
-  } finally {
-    active.delete(p.id);
   }
 }
 
