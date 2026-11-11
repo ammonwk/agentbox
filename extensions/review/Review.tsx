@@ -762,7 +762,10 @@ function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => voi
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (images.onKeyDown(e)) return;
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
+              if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
             }}
           />
         </AttachFrame>
