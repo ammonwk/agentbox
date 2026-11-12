@@ -228,8 +228,11 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   }
 
   const { session, placement } = out;
+  // Where it went, and the account's numbers, are the balancer's business:
+  // printed, they read to the agent that ran this as a budget to watch. Said
+  // only when it went where the balancer would not have put it.
   const account = placement?.candidates.find((c) => c.accountId === placement.accountId);
-  process.stderr.write(`${session.id} → ${account?.label ?? placement?.accountId ?? "?"}${placement ? `: ${placement.why}` : ""}\n`);
+  if (placement && account && !account.eligible) process.stderr.write(`${session.id} → ${account.label}: ${placement.why}\n`);
   if (flags.has("detach")) {
     console.log(session.id);
     return 0;
@@ -434,8 +437,8 @@ const USAGE = `usage: agentbox <command>
   service install       keep the backend available at login (macOS) or boot (Linux)
   claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--effort E] [--parent ID] [--detach]
          [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B] [prompt…]
-                        start a session here, on the account with the most room,
-                        and attach this terminal to it (detach: Ctrl-b d);
+                        start a session here and attach this terminal to it
+                        (detach: Ctrl-b d); agentbox picks the account;
                         --effort how hard it thinks, one of the provider's levels (codex xhigh);
                         --parent puts it under that session (default: the one this runs in);
                         --org runs it on the org's accounts, where its members see it, --personal

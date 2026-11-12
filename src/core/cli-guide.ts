@@ -21,7 +21,6 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox grep <regex> [-i] [--all]   # text, thinking, tool calls and tool output: id time who line
     agentbox screen <id>            # what its terminal shows right now (tmux sessions)
     agentbox diff <id>              # its worktree's changes
-    agentbox usage                  # each account's limits
     agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once] [--now]
                                     # runs until killed, or until the agent that armed
                                     # it exits: a line each time one starts
