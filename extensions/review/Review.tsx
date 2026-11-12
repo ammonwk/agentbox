@@ -18,6 +18,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { type AppState, type Card, type Repo, type Session, AttachButton, AttachFrame, Button, call, describeAt, Empty, go, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
 import { laterOf, stackOf } from "./cardorder";
+
+/** A gesture shown before the server has it: what it changes, and the server's copy when it was made. */
+type Held = { patch: Partial<Card>; was: Card | undefined };
+
+/**
+ * The server has the gesture once each field it changes is either what it set
+ * or no longer what the server had. Its state alone is not enough: a card kept
+ * for later again is "later" before and after, and dropping the hold then put
+ * it back where it was kept the first time until the new time arrived.
+ */
+const settled = (c: Card, { patch, was }: Held): boolean =>
+  (Object.keys(patch) as (keyof Card)[]).every((k) => c[k] === patch[k] || c[k] !== was?.[k]);
 import "./review.css";
 
 const api = {
@@ -85,14 +97,24 @@ function prLabel(url: string): string {
 export function Review({ state, rest }: { state: AppState; rest: string }) {
   const [tab, setTab] = useState<Tab>("stack");
   // What was just done here, shown at once: the server's copy follows within a moment.
-  const [local, setLocal] = useState<Map<number, Partial<Card>>>(new Map());
-  const cards = useMemo(() => state.cards.map((c) => (local.has(c.id) ? { ...c, ...local.get(c.id) } : c)), [state.cards, local]);
+  const [local, setLocal] = useState<Map<number, Held>>(new Map());
+  const server = useRef(state.cards);
+  server.current = state.cards;
+  /** `local` with `patch` held over card `id`, against the server's copy as it is now. */
+  const hold = useCallback(
+    (prev: Map<number, Held>, id: number, patch: Partial<Card>, was = server.current.find((c) => c.id === id)) => new Map(prev).set(id, { patch, was }),
+    [],
+  );
+  const cards = useMemo(() => state.cards.map((c) => (local.has(c.id) ? { ...c, ...local.get(c.id)!.patch } : c)), [state.cards, local]);
   useEffect(() => {
-    // Once the server says the same, its word is the one kept.
+    // Once the server has it, its word is the one kept.
     setLocal((prev) => {
       if (prev.size === 0) return prev;
       const next = new Map(prev);
-      for (const c of state.cards) if (next.get(c.id)?.state === c.state) next.delete(c.id);
+      for (const c of state.cards) {
+        const held = next.get(c.id);
+        if (held && settled(c, held)) next.delete(c.id);
+      }
       return next.size === prev.size ? prev : next;
     });
   }, [state.cards]);
@@ -169,9 +191,10 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     const onStack = card.state === "open" || card.state === "later";
     if (onStack) setLeaving({ id: card.id, to: what === "later" ? "left" : what === "answered" ? "right" : "down" });
     const patch: Partial<Card> = what === "later" ? { state: "later", laterAt: Date.now() } : { state: "answered", answer: text, answeredAt: Date.now() };
+    const was = server.current.find((c) => c.id === card.id);
     setTimeout(
       () => {
-        setLocal((prev) => new Map(prev).set(card.id, patch));
+        setLocal((prev) => hold(prev, card.id, patch, was));
         setLeaving(null);
       },
       onStack ? 190 : 0,
@@ -192,7 +215,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     );
     setLast({ card, what, at: Date.now(), done });
     return done;
-  }, []);
+  }, [hold]);
 
   const undo = useCallback(() => {
     if (!last) return;
@@ -200,7 +223,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     undone.current = card.id;
     setLast(null);
     setError(null);
-    setLocal((prev) => new Map(prev).set(card.id, { state: card.state, answer: null, answeredAt: null, laterAt: card.laterAt }));
+    setLocal((prev) => hold(prev, card.id, { state: card.state, answer: null, answeredAt: null, laterAt: card.laterAt }));
     api.undoCard(card.id).catch((e: Error) => {
       setError(e.message);
       setLocal((prev) => {
@@ -209,7 +232,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
         return next;
       });
     });
-  }, [last]);
+  }, [last, hold]);
 
   /** Start the session that writes the catch-up page, then mark every card it took seen. */
   const catchUp = useCallback(
@@ -221,11 +244,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
       setError(null);
       setCaughtUp({ session: session.id, n: list.length });
       const at = Date.now();
-      setLocal((prev) => {
-        const next = new Map(prev);
-        for (const c of list) next.set(c.id, { state: "answered", answer: "", answeredAt: at });
-        return next;
-      });
+      setLocal((prev) => list.reduce((next, c) => hold(next, c.id, { state: "answered", answer: "", answeredAt: at }), prev));
       const failed: Card[] = [];
       for (let i = 0; i < list.length; i += SEEN_AT_ONCE) {
         await Promise.all(list.slice(i, i + SEEN_AT_ONCE).map((c) => api.answerCard(c.id, "").catch(() => failed.push(c))));
@@ -238,7 +257,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
         return next;
       });
     },
-    [state.repos],
+    [state.repos, hold],
   );
 
   /** Down: the recommendation is the answer, or the card is seen; a decision without one stays. */
