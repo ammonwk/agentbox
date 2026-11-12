@@ -558,7 +558,7 @@ function CardIndex({
                   <span className={`card-kind-chip card-kind-${c.kind}`}>{KIND[c.kind]}</span>
                   {c.state === "later" && tab === "stack" ? <span>later</span> : null}
                   {from(c) ? <span className="review-index-from">{from(c)}</span> : null}
-                  <RelativeTime ts={c.answeredAt ?? c.laterAt ?? c.createdAt} short />
+                  <RelativeTime ts={tab === "done" ? (c.answeredAt ?? c.createdAt) : c.createdAt} short />
                 </span>
               </button>
             </li>

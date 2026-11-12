@@ -863,3 +863,9 @@
   background: color-mix(in srgb, var(--warning) 30%, transparent);
   color: inherit;
 }
+.review-search input:focus,
+.review-search input:focus-visible {
+  outline: none;
+  border: 0;
+  box-shadow: none;
+}
