@@ -1,8 +1,8 @@
 /**
  * Review: the cards sessions handed you (src/core/cards.ts), one at a time.
  *
- * A stack (cardorder.ts): the decisions you owe, those you kept for later last
- * among them, then what happened. The card on top takes three gestures, each with a
+ * A stack (cardorder.ts): what you have never put off, decisions before what
+ * happened, then what you kept for later. The card on top takes three gestures, each with a
  * button under it and a Shift+arrow shortcut (plain arrows navigate):
  *   right (Shift+→) — answer it: a sheet with a text box. Empty, on a card that
  *               only wanted seeing, means "seen".
@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { type AppState, type Card, type Repo, type Session, AttachButton, AttachFrame, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
+import { type AppState, type Card, type Repo, type Session, AttachButton, AttachFrame, Button, call, describeAt, Empty, go, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
 import { laterOf, stackOf } from "./cardorder";
 import "./review.css";
 
@@ -82,7 +82,7 @@ function prLabel(url: string): string {
   return m ? `#${m[3]}` : url.replace(/^https?:\/\//, "").slice(0, 40);
 }
 
-export function Review({ state }: { state: AppState }) {
+export function Review({ state, rest }: { state: AppState; rest: string }) {
   const [tab, setTab] = useState<Tab>("stack");
   // What was just done here, shown at once: the server's copy follows within a moment.
   const [local, setLocal] = useState<Map<number, Partial<Card>>>(new Map());
@@ -111,6 +111,16 @@ export function Review({ state }: { state: AppState }) {
   const [caughtUp, setCaughtUp] = useState<{ session: string; n: number } | null>(null);
   const respond = useCallback((c: Card) => (c.kind === "decision" ? setAnswering(c) : setCatchingUp(true)), []);
   const [reading, setReading] = useState<Card | null>(null);
+  // `#/review/card/1160` (what "card 1160" in a card or a session links to)
+  // opens that card whole, fetched when this project's list does not hold it.
+  const linked = Number(/^card\/(\d+)$/.exec(rest)?.[1]) || null;
+  useEffect(() => {
+    if (!linked) return;
+    const held = state.cards.find((c) => c.id === linked);
+    if (held) setReading(held);
+    else api.card(linked).then(setReading, (e: Error) => setError(e.message));
+    // Once per link, not on every state push.
+  }, [linked]);
   const [leaving, setLeaving] = useState<{ id: number; to: "left" | "right" | "down" } | null>(null);
   /** The last gesture, while Undo is offered; `done` is true once the server has it. */
   const [last, setLast] = useState<{ card: Card; what: "answered" | "approved" | "seen" | "later"; at: number; done: Promise<boolean> } | null>(null);
@@ -364,7 +374,10 @@ export function Review({ state }: { state: AppState }) {
         <LongView
           card={cards.find((c) => c.id === reading.id) ?? reading}
           state={state}
-          onClose={() => setReading(null)}
+          onClose={() => {
+            setReading(null);
+            if (linked) go({ page: "ext", id: "review", rest: "" }, true);
+          }}
           onLater={(c) => act(c, "later")}
           onApprove={approve}
           onAnswer={respond}

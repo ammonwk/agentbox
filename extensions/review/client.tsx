@@ -19,6 +19,6 @@ export default function review(p: Plugin) {
       ["↑", "Read it whole"],
       ["u", "Undo"],
     ],
-    render: ({ state }) => <Review state={state} />,
+    render: ({ state, rest }) => <Review state={state} rest={rest} />,
   });
 }

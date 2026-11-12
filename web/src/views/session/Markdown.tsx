@@ -49,7 +49,7 @@ export const Markdown = memo(function Markdown({ text, inline }: { text: string;
   const md = rendered(body, `${envOf(base, links.self, names)} ${refsIn(body, links.index)} ${inline ? "i" : "b"}`, () =>
     renderMarkdown({
       children: body,
-      remarkPlugins: [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+      remarkPlugins: [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), remarkCardLinks(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
       disallowedElements: inline ? BLOCKS : undefined,
       unwrapDisallowed: inline,
       urlTransform: keepOurUrls,
@@ -289,6 +289,18 @@ function remarkPrLinks(base: string) {
   return () => (tree: Root) => {
     rewrite(tree, true, (text, code) =>
       splitRefs(text, code, (t) => prRefs(t, code).map((r) => ({ start: r.start, end: r.end, url: prUrl(base, r.number, r.repo) }))),
+    );
+  };
+}
+
+/** `card 1160` (or `cards 12`) opens that review card, before the PR pass
+ *  can take its number for a pull request. */
+function remarkCardLinks() {
+  return () => (tree: Root) => {
+    rewrite(tree, true, (text, code) =>
+      splitRefs(text, code, (t) =>
+        [...t.matchAll(/\bcards? #?(\d{1,6})\b/gi)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, url: hrefOf({ page: "ext", id: "review", rest: `card/${m[1]}` }) })),
+      ),
     );
   };
 }

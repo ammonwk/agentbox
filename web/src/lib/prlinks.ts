@@ -35,7 +35,8 @@ const REF = new RegExp(
     String.raw`(?<![\p{L}\p{N}_&])#(?<hn>\d{1,6})${END}`,
     // A bare 6644: not in a path, a time, a decimal or a word. `7653/7654`
     // and `7654:` are fine; `/tmp/7654`, `12:3456` and `v1.2345` are not.
-    String.raw`(?<![\w.:@$%#&-])(?<!(?<!\d)\/)(?<bn>\d{4})(?![\w%]|[.:]\d|-\w|\/(?!#?\d))`,
+    // `card 1160` is a review card (Markdown.tsx links it there), not a PR.
+    String.raw`(?<![\w.:@$%#&-])(?<!(?<!\d)\/)(?<!\bcards? )(?<bn>\d{4})(?![\w%]|[.:]\d|-\w|\/(?!#?\d))`,
   ].join("|"),
   "giud",
 );
