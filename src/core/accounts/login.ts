@@ -22,6 +22,7 @@ import { agentboxBin, userHome } from "../paths";
 import { join } from "node:path";
 import { GO_LOGIN_FILE } from "./gocred";
 import { AccountError, authEnv, credentialsPath } from "./homes";
+import { forgetClaudeKeychain, readClaudeCredentials } from "./identity";
 
 const OUTPUT_KEEP = 4096;
 /** Raw (unscrubbed) text kept internally; larger than OUTPUT_KEEP so a secret
@@ -326,7 +327,10 @@ export class LoginManager extends EventEmitter {
       /* already closed */
     }
     if (run.finished) return;
-    const wrote = existsSync(run.cmd.credentialFile);
+    // Claude on macOS saves its login in the Keychain, not the file.
+    const claude = run.account.provider === "claude";
+    if (claude) forgetClaudeKeychain(run.account.home);
+    const wrote = existsSync(run.cmd.credentialFile) || (claude && readClaudeCredentials(run.account.home) !== null);
     if (code === 0 && wrote) {
       run.flow.state = "verifying";
       this.emit("change", { ...run.flow });
@@ -344,7 +348,7 @@ export class LoginManager extends EventEmitter {
       run,
       "failed",
       code === 0
-        ? `the CLI exited without writing ${run.cmd.credentialFile}`
+        ? `the CLI exited without saving a login (no ${run.cmd.credentialFile})`
         : `the CLI exited with code ${code}${lastLine ? `: ${lastLine.slice(0, 200)}` : ""}`,
     );
   }

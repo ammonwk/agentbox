@@ -127,6 +127,10 @@ edits unstaged.
   its own login. Usage reads with an expired token report `stale`. A
   claude login ends at its `refreshTokenExpiresAt`, about four weeks after
   `/login`, whatever refreshes it; only logging in again moves it.
+- **On macOS a claude login is in the Keychain.** The CLI normally writes no
+  `.credentials.json` there. `readClaudeCredentials` reads the item the CLI
+  named for that home and holds nothing but its parsed fields, in memory. Use
+  it, not the file, to ask whether a claude home is logged in.
 - **The balancer is pure.** `src/core/balancer.ts` takes numbers and returns
   a choice with every candidate's inputs attached; it touches no I/O. Keep it
   that way — the assignments table stores its inputs so placements can be

@@ -77,7 +77,9 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
 }
 
 /** A home of each provider: its `credentials` file, whose existence means
- *  "this home has logged in" (for omp, its OpenCode Go Console sign-in); the
+ *  "this home has logged in" (for omp, its OpenCode Go Console sign-in; claude
+ *  on macOS usually has none, its login being in the Keychain, so ask
+ *  `readClaudeCredentials` instead); the
  *  `login` it holds, where its email alone does not name it (`loginKey`); and
  *  `share`, which links it to the default home's configuration and returns
  *  the names it added. */
@@ -286,7 +288,7 @@ export async function ensureDefaultAccounts(
   return added;
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return canonical(a) === canonical(b);
 }
 

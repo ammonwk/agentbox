@@ -1,5 +1,6 @@
 /** Who an account is logged in as, and whether that login still works —
- * read from the files the CLI wrote, without refreshing anything.
+ * read from where the CLI keeps it (its files, and for claude on macOS the
+ * login Keychain), without refreshing or copying anything.
  *
  * Token VALUES never leave this module except as the one argument to a usage
  * request's Authorization header (usage.ts). Nothing here logs, returns in an
@@ -7,11 +8,13 @@
  * asked for and drop the rest.
  */
 
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
-import { authEnv, claudeJsonPath, credentialsPath } from "./homes";
+import { authEnv, claudeJsonPath, credentialsPath, defaultHome, samePath } from "./homes";
 import { readGoLogin } from "./gocred";
 import { readApiKey, serviceOf } from "./services";
 
@@ -52,10 +55,11 @@ function rec(v: unknown): Record<string, unknown> | null {
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-/** `<home>/.credentials.json` → `claudeAiOauth`. Null when there is no
- *  subscription login in it (an MCP-only credentials file is not a login). */
-export function readClaudeCredentials(home: string): ClaudeCredentials | null {
-  const o = rec(rec(readJson(join(home, ".credentials.json")))?.claudeAiOauth);
+/** `claudeAiOauth` from what the CLI stored. Null when there is no
+ *  subscription login in it (an MCP-only credentials file is not a login).
+ *  The refresh token stops here: only whether there is one goes on. */
+function claudeCredentialsIn(stored: unknown): ClaudeCredentials | null {
+  const o = rec(rec(stored)?.claudeAiOauth);
   if (!o) return null;
   return {
     accessToken: str(o.accessToken),
@@ -66,6 +70,52 @@ export function readClaudeCredentials(home: string): ClaudeCredentials | null {
     subscriptionType: str(o.subscriptionType),
     rateLimitTier: str(o.rateLimitTier),
   };
+}
+
+/** Each Keychain read is a subprocess, and the usage poller asks every few
+ *  seconds; the CLI itself holds its reads about this long. */
+const KEYCHAIN_TTL_MS = 30_000;
+/** `security`'s exit status for errSecItemNotFound. */
+const KEYCHAIN_NOT_FOUND = 44;
+const keychainReads = new Map<string, { at: number; value: ClaudeCredentials | null }>();
+
+/** The CLI's own name for a home's Keychain item: bare for the default home,
+ *  which it runs with no `CLAUDE_CONFIG_DIR`, else suffixed from that path. */
+function claudeKeychainService(home: string): string {
+  const base = "Claude Code-credentials";
+  if (samePath(home, defaultHome("claude"))) return base;
+  return `${base}-${createHash("sha256").update(home.normalize("NFC")).digest("hex").slice(0, 8)}`;
+}
+
+function readClaudeKeychain(home: string): ClaudeCredentials | null {
+  if (process.platform !== "darwin") return null;
+  const service = claudeKeychainService(home);
+  const hit = keychainReads.get(service);
+  if (hit && Date.now() - hit.at < KEYCHAIN_TTL_MS) return hit.value;
+  const r = spawnSync("security", ["find-generic-password", "-s", service, "-w"], { encoding: "utf8", timeout: 3_000 });
+  // A locked Keychain or a timeout says nothing about the login: keep the last read.
+  let value = hit?.value ?? null;
+  if (r.status === KEYCHAIN_NOT_FOUND) value = null;
+  else if (r.status === 0) {
+    try {
+      value = claudeCredentialsIn(JSON.parse(r.stdout));
+    } catch {
+      value = null;
+    }
+  }
+  keychainReads.set(service, { at: Date.now(), value });
+  return value;
+}
+
+/** Drop the held read of a home's Keychain item: its login just changed. */
+export function forgetClaudeKeychain(home: string): void {
+  keychainReads.delete(claudeKeychainService(home));
+}
+
+/** A home's claude login. On macOS the CLI keeps it in the Keychain and falls
+ *  back to `<home>/.credentials.json`, so this reads them in that order. */
+export function readClaudeCredentials(home: string): ClaudeCredentials | null {
+  return readClaudeKeychain(home) ?? claudeCredentialsIn(readJson(join(home, ".credentials.json")));
 }
 
 /**
