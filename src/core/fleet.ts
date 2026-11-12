@@ -838,7 +838,7 @@ export class Fleet extends EventEmitter {
       l.seen = true;
       if (l.since - l.hitAt > CARRY_ON_WITHIN_MS) continue;
       console.log(`agentbox: ${id} (${v.title}): the usage limit it stopped at has lifted; telling it to carry on`);
-      void this.sendInPlace(id, "[agentbox: carry on where you left off.]").catch((e) =>
+      void this.sendInPlace(id, "[agentbox: limits have reset, carry on where you left off]").catch((e) =>
         console.error(`agentbox: continuing ${id} after its limit lifted failed:`, e),
       );
     }
@@ -885,7 +885,7 @@ export class Fleet extends EventEmitter {
     console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its one move`);
     void this.moveAndContinue(v.id, {
       accountId: to.accountId,
-      prompt: "[agentbox: carry on where you left off.]",
+      prompt: "[agentbox: limits have reset, carry on where you left off]",
     })
       .then(() => updateSessionRecord(v.id, { hoppedAt: now }))
       .catch((e) => console.error(`agentbox: moving ${v.id} off its account's limit failed:`, e))
