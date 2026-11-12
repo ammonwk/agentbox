@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { type AppState, type Card, type Repo, type Session, AttachButton, AttachFrame, Button, call, describeAt, Empty, go, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime, useDraft } from "agentbox/client";
 import { laterOf, stackOf } from "./cardorder";
+import { marked, plain, search, termsOf } from "./search";
 
 /** A gesture shown before the server has it: what it changes, and the server's copy when it was made. */
 type Held = { patch: Partial<Card>; was: Card | undefined };
@@ -120,6 +121,18 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
   }, [state.cards]);
 
   const stack = useMemo(() => stackOf(cards), [cards]);
+  /**
+   * The card picked from the index, in front: the stack is read on from it and
+   * comes round to those before it, so working through it carries on from
+   * there. Unset, or once that card has left the stack, it starts at the top.
+   */
+  const [pick, setPick] = useState<number | null>(null);
+  const view = useMemo(() => {
+    const i = pick === null ? -1 : stack.findIndex((c) => c.id === pick);
+    return i <= 0 ? stack : [...stack.slice(i), ...stack.slice(0, i)];
+  }, [stack, pick]);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const later = useMemo(() => laterOf(cards), [cards]);
   const done = useMemo(
     () => cards.filter((c) => c.state === "answered" || c.state === "closed").sort((a, b) => (b.answeredAt ?? b.createdAt) - (a.answeredAt ?? a.createdAt)),
@@ -192,9 +205,12 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     if (onStack) setLeaving({ id: card.id, to: what === "later" ? "left" : what === "answered" ? "right" : "down" });
     const patch: Partial<Card> = what === "later" ? { state: "later", laterAt: Date.now() } : { state: "answered", answer: text, answeredAt: Date.now() };
     const was = server.current.find((c) => c.id === card.id);
+    // The card in front leaving, the one after it comes next: a card kept for later goes to the back, not round again.
+    const after = viewRef.current[0]?.id === card.id ? (viewRef.current[1]?.id ?? null) : undefined;
     setTimeout(
       () => {
         setLocal((prev) => hold(prev, card.id, patch, was));
+        if (after !== undefined) setPick(after);
         setLeaving(null);
       },
       onStack ? 190 : 0,
@@ -224,6 +240,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     setLast(null);
     setError(null);
     setLocal((prev) => hold(prev, card.id, { state: card.state, answer: null, answeredAt: null, laterAt: card.laterAt }));
+    if (card.state === "open" || card.state === "later") setPick(card.id);
     api.undoCard(card.id).catch((e: Error) => {
       setError(e.message);
       setLocal((prev) => {
@@ -271,15 +288,27 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
     [act],
   );
 
-  const top = tab === "stack" ? (stack.find((c) => c.id !== leaving?.id) ?? null) : null;
-  const shownTop = stack[0] ?? null;
+  const top = tab === "stack" ? (view.find((c) => c.id !== leaving?.id) ?? null) : null;
+  const shownTop = view[0] ?? null;
+  const tabs = { stack, later, done };
+  /** The card being looked at, marked in the index. */
+  const current = reading?.id ?? (tab === "stack" ? top?.id : undefined);
+  const jump = useCallback(
+    (c: Card) => {
+      if (tab === "stack") {
+        setReading(null);
+        setPick(c.id);
+      } else setReading(c);
+    },
+    [tab],
+  );
 
   // The keys, while no sheet has the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (answering || catchingUp || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (!el?.closest(".review")) return;
+      if (!el?.closest(".review-shell")) return;
       if (e.key.startsWith("Arrow") && !e.shiftKey) return;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
       const card = reading ?? (tab === "stack" ? shownTop : null);
@@ -298,6 +327,8 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
   }, [answering, catchingUp, reading, tab, shownTop, act, undo, approve, respond]);
 
   return (
+    <div className="review-shell">
+    <CardIndex tabs={tabs} tab={tab} state={state} current={current} onTab={setTab} onPick={jump} />
     <div className="review">
       <header className="review-head">
         <h2 className="review-title">Review</h2>
@@ -331,11 +362,11 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
         ) : (
           <>
             <div className="review-stack">
-              {stack
+              {view
                 .slice(0, 3)
                 .reverse()
                 .map((c) => {
-                  const depth = stack.indexOf(c) - (leaving && stack[0]?.id === leaving.id ? 1 : 0);
+                  const depth = view.indexOf(c) - (leaving && view[0]?.id === leaving.id ? 1 : 0);
                   return (
                     <SwipeCard
                       key={c.id}
@@ -354,7 +385,7 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
             <p className={`review-count${nothing ? " review-nothing" : ""}`} aria-live="polite">
               {nothing ?? (
                 <>
-                  {stack.length === 1 ? "The last one" : `1 of ${stack.length}`}
+                  {stack.length === 1 ? "The last one" : `${stack.indexOf(shownTop!) + 1} of ${stack.length}`}
                   {shownTop?.state === "later" ? " · kept for later" : ""}
                 </>
               )}
@@ -363,7 +394,10 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
           </>
         )
       ) : (
-        <CardList cards={tab === "later" ? later : done} state={state} empty={tab === "later" ? "Nothing kept for later." : "Nothing answered yet."} onOpen={setReading} />
+        <>
+          <CardList cards={tab === "later" ? later : done} state={state} empty={tab === "later" ? "Nothing kept for later." : "Nothing answered yet."} onOpen={setReading} />
+          {tabs[tab].length ? <p className="review-pick faint">Pick a card from the list to read it.</p> : null}
+        </>
       )}
 
       {caughtUp && !last ? (
@@ -406,6 +440,140 @@ export function Review({ state, rest }: { state: AppState; rest: string }) {
       {catchingUp ? <CatchUpSheet cards={reports} onClose={() => setCatchingUp(false)} onStart={catchUp} /> : null}
       {answering ? <AnswerSheet card={answering} onClose={() => setAnswering(null)} onSend={(text) => act(answering, text ? "answered" : "seen", text)} /> : null}
     </div>
+    </div>
+  );
+}
+
+const TAB_NAME: Record<Tab, string> = { stack: "to review", later: "kept for later", done: "done" };
+
+/**
+ * On a desk, beside the stack: the tab's cards as a list to scroll and jump
+ * through, the one being looked at marked, and a search over them. A search
+ * puts the cards whose titles have every word first, then those that have
+ * them in what they say, and counts what it finds in the other tabs.
+ */
+function CardIndex({
+  tabs,
+  tab,
+  state,
+  current,
+  onTab,
+  onPick,
+}: {
+  tabs: Record<Tab, Card[]>;
+  tab: Tab;
+  state: AppState;
+  current: number | undefined;
+  onTab: (t: Tab) => void;
+  onPick: (c: Card) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const listRef = useRef<HTMLOListElement>(null);
+  const from = useCallback(
+    (c: Card) => {
+      const s = c.sessionId ? state.sessions.find((x) => x.id === c.sessionId) : null;
+      return s ? s.label || s.title : undefined;
+    },
+    [state.sessions],
+  );
+  const terms = useMemo(() => termsOf(query), [query]);
+  const hits = useMemo(() => search(tabs[tab], query, from), [tabs, tab, query, from]);
+  const elsewhere = useMemo(
+    () => (terms.length ? (Object.keys(tabs) as Tab[]).filter((t) => t !== tab).map((t) => [t, search(tabs[t], query, from).length] as const).filter(([, n]) => n > 0) : []),
+    [tabs, tab, query, terms, from],
+  );
+  const firstBody = hits.findIndex((h) => terms.length && !h.inTitle && h.snippet !== null);
+
+  // What is being looked at stays in sight as it changes.
+  useEffect(() => {
+    if (current === undefined) return;
+    listRef.current?.querySelector(`[data-card="${current}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [current, tab]);
+
+  return (
+    <aside className="review-index" data-nav-region="index" aria-label="Cards">
+      <div className="review-search">
+        <Icon.search size={14} />
+        <input
+          type="search"
+          value={query}
+          placeholder={`Search ${tabs[tab].length} ${TAB_NAME[tab]}`}
+          aria-label="Search cards"
+          data-search
+          spellCheck={false}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.preventDefault();
+              e.stopPropagation();
+              setQuery("");
+            } else if (e.key === "Enter" && hits[0]) {
+              e.preventDefault();
+              onPick(hits[0].card);
+            }
+          }}
+        />
+        {query ? (
+          <button type="button" className="review-search-clear" onClick={() => setQuery("")} title="Clear (Esc)" aria-label="Clear the search">
+            <Icon.x size={13} />
+          </button>
+        ) : (
+          <kbd className="review-search-key">/</kbd>
+        )}
+      </div>
+      {terms.length ? (
+        <p className="review-index-found">
+          {hits.length ? `${hits.length} ${hits.length === 1 ? "card" : "cards"}` : "Nothing here"}
+          {elsewhere.map(([t, n]) => (
+            <button key={t} type="button" className="review-index-elsewhere" onClick={() => onTab(t)}>
+              {n} in {t === "stack" ? "To review" : t === "later" ? "Later" : "Done"}
+            </button>
+          ))}
+        </p>
+      ) : null}
+      <ol className="review-index-list" ref={listRef}>
+        {hits.map((h, i) => {
+          const c = h.card;
+          const said = c.state === "answered" ? (c.answer ? `You said: ${c.answer}` : "Seen") : c.state === "closed" ? `Withdrawn${c.closedWhy ? `: ${c.closedWhy}` : ""}` : plain(c.short);
+          return (
+            <li key={c.id}>
+              {terms.length && i === 0 && h.inTitle ? <p className="review-index-group">In the title</p> : null}
+              {i === firstBody ? <p className="review-index-group">In what it says</p> : null}
+              <button
+                type="button"
+                className={`review-index-row review-index-${c.kind}`}
+                data-card={c.id}
+                data-nav-item
+                data-nav-id={`index:${c.id}`}
+                aria-current={c.id === current || undefined}
+                onClick={() => onPick(c)}
+              >
+                <span className="review-index-title">
+                  <Marked text={plain(c.title)} terms={terms} />
+                </span>
+                <span className="review-index-said">
+                  <Marked text={h.snippet ?? said} terms={terms} />
+                </span>
+                <span className="review-index-meta">
+                  <span className={`card-kind-chip card-kind-${c.kind}`}>{KIND[c.kind]}</span>
+                  {c.state === "later" && tab === "stack" ? <span>later</span> : null}
+                  {from(c) ? <span className="review-index-from">{from(c)}</span> : null}
+                  <RelativeTime ts={c.answeredAt ?? c.laterAt ?? c.createdAt} short />
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </aside>
+  );
+}
+
+function Marked({ text, terms }: { text: string; terms: string[] }) {
+  return (
+    <>
+      {marked(text, terms).map((r, i) => (r.hit ? <mark key={i}>{r.text}</mark> : r.text))}
+    </>
   );
 }
 

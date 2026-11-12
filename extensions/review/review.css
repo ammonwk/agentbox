@@ -634,3 +634,232 @@
     display: none;
   }
 }
+
+/* ------------------------------------------------------------ the index */
+
+/* On a desk the stack has the index of its cards beside it; on a phone, only the stack. */
+.review-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.review-shell > .review {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.review-index,
+.review-pick {
+  display: none;
+}
+@media (min-width: 1000px) {
+  .review-index {
+    flex: none;
+    width: clamp(300px, 26vw, 400px);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--sunken) 55%, transparent);
+  }
+  /* The list is beside it: the space says which card to pick. */
+  .review-shell .review-list {
+    display: none;
+  }
+  .review-pick {
+    display: block;
+    margin: auto;
+    padding-bottom: 15vh;
+    font-size: 13px;
+  }
+}
+.review-search {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 12px 8px;
+  padding: 0 8px 0 11px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--faint);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.review-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--muted);
+}
+.review-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.review-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.review-search-key {
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--faint);
+}
+.review-search-clear {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.review-search-clear:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.review-index-found {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 14px 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.review-index-elsewhere {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.review-index-elsewhere:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.review-index-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 2px 8px 16px;
+  list-style: none;
+  scroll-padding: 8px;
+}
+.review-index-group {
+  margin: 10px 6px 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.review-index-row {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  margin: 1px 0;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.review-index-row:hover {
+  background: var(--hover);
+}
+.review-index-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.review-index-row[aria-current="true"] {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+/* What it is, down its left edge: the accent marks the one being looked at. */
+.review-index-row::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 3px;
+  background: transparent;
+}
+.review-index-row[aria-current="true"]::before {
+  background: var(--accent);
+}
+.review-index-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.32;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.review-index-said {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.review-index-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.review-index-meta .card-kind-chip {
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+.review-index-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.review-index-meta > :last-child {
+  margin-left: auto;
+}
+.review-index-row mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warning) 30%, transparent);
+  color: inherit;
+}
