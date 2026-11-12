@@ -1317,8 +1317,9 @@ textarea,
   margin: 0;
   gap: 14px;
 }
-/* The session's id, quiet until hovered; a click copies it. */
-.sys-session .sys-sid {
+/* The session's id, quiet until hovered; a click copies it. In the system
+   bar, and in a phone's session header (which has no system bar). */
+.sys-sid {
   min-height: 0;
   padding: 2px 4px;
   margin-left: -4px;
@@ -1327,7 +1328,7 @@ textarea,
   color: var(--faint);
   font-size: 11px;
 }
-.sys-session .sys-sid:hover {
+.sys-sid:hover {
   color: var(--text);
 }
 .sys-session .sys-sid svg {

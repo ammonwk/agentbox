@@ -677,6 +677,7 @@ function Detail({
   );
   const facts = (
     <div className="sx-facts">
+      <CopyButton className="fact mono sys-sid" text={session.id} label={session.id} />
       <span className="fact">
         <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
       </span>
