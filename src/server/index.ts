@@ -54,7 +54,7 @@ import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
-import { CARD_KINDS, Cards, moveCards } from "../core/cards";
+import { CARD_KINDS, Cards, cardsOn, moveCards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent, Session } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
@@ -2246,7 +2246,7 @@ async function sayRateChanges(): Promise<void> {
     await fleet.rates.settled();
     const { changes, seen } = fleet.rates.changes(getKv<Record<string, number>>("rate-changes") ?? {});
     setKv("rate-changes", seen);
-    for (const c of changes) cards.add({ kind: "note", title: c.title, short: c.short, key: c.key });
+    if (cardsOn()) for (const c of changes) cards.add({ kind: "note", title: c.title, short: c.short, key: c.key });
   } catch (e) {
     console.error("agentbox: checking what the plans are worth failed:", e);
   }

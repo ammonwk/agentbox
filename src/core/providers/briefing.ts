@@ -1,3 +1,4 @@
+import { extensionOn } from "../extensions";
 import { repoRulesFor, rulesPath, standingRules } from "../rules";
 
 /**
@@ -24,7 +25,12 @@ const BRIEFING = [
 ].join("\n\n");
 
 /** The exact text a session is given, for the Context page: briefing only. */
-export const briefingText = (): string => BRIEFING;
+/** Said while the Review extension is off: no card would be seen, so a rule
+ *  or skill that says to send one must not win over this. */
+const CARDS_OFF_BRIEFING =
+  "Review cards are off. Do not run `agentbox card add`: the server refuses it. When you need a decision from the user, or have something to tell them, ask or tell them directly in this conversation, with your recommendation, and end your turn to wait. This holds over any rule or skill that says to send a card.";
+
+export const briefingText = (): string => (extensionOn("review") ? BRIEFING : `${BRIEFING}\n\n${CARDS_OFF_BRIEFING}`);
 
 /**
  * The briefing with the user's standing rules after it, and then the rules of
@@ -33,7 +39,7 @@ export const briefingText = (): string => BRIEFING;
  * restart of the server; `cwd` is what picks the repo (`core/rules.ts`).
  */
 export function briefing(cwd?: string): string {
-  const parts = [BRIEFING];
+  const parts = [briefingText()];
   const rules = standingRules();
   if (rules) parts.push(`The user's standing rules for every session (${rulesPath()}):\n\n${rules}`);
   const repo = cwd ? repoRulesFor(cwd) : null;

@@ -94,7 +94,8 @@ function dirOf(name: string): string {
 }
 
 const offFile = (name: string): string => join(extensionHome(name), "off");
-const isOn = (name: string): boolean => !existsSync(offFile(name));
+/** Not turned off (`setExtensionOn`). */
+export const extensionOn = (name: string): boolean => !existsSync(offFile(name));
 
 /** Turn it off (its program stops within seconds, and the app loads its client no more) or on again. */
 export function setExtensionOn(name: string, on: boolean): void {
@@ -263,7 +264,7 @@ export class Extensions {
         error = (e as Error).message;
       }
       const p = this.procs.get(name);
-      const enabled = isOn(name);
+      const enabled = extensionOn(name);
       return {
         name,
         title: m?.title ?? name,
@@ -346,7 +347,7 @@ export class Extensions {
   private async tick(): Promise<void> {
     const now = Date.now();
     // What has a program to run, and is on.
-    const here = new Set(names().filter(isOn));
+    const here = new Set(names().filter(extensionOn));
     for (const name of [...this.procs.keys()]) {
       if (here.has(name)) continue;
       this.kill(name);

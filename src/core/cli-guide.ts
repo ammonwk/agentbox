@@ -152,7 +152,9 @@ why). Arming the same wait twice is one wait.
                                     # without it they cannot approve in one gesture.
                                     # --long-file is only the evidence behind that, in
                                     # Markdown: do not repeat the card there.
-                                    # --key adds it once, however often you run it
+                                    # --key adds it once, however often you run it.
+                                    # Refused while the Review extension is off:
+                                    # then ask in your own conversation
     agentbox card list [--open|--later|--answered [--unread]|--closed] [--json]
     agentbox card show <id>         # all of it, with the answer
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)

@@ -31,12 +31,17 @@
  * card of its own open (the steward's, `card add`) gets none: that one already
  * asks.
  *
+ * With the Review extension turned off nobody sees a card, so there are none:
+ * `add` refuses, an ask stays in its conversation, and the briefing tells
+ * every session to ask there (`providers/briefing.ts`).
+ *
  * Cards are the user's, not a conversation, so they live in the database.
  * A decision's default and its time are the asker's to act on; agentbox only
  * shows that the time has passed.
  */
 
 import { getDb } from "./db";
+import { extensionOn } from "./extensions";
 import { FleetError, type Fleet } from "./fleet";
 import { turnStatus } from "./turnstatus";
 import type { Card, CardKind, CardState, Session } from "./types";
@@ -57,6 +62,10 @@ const ASK_AFTER_MS = 60 * 60_000;
 /** One older than this is history (its work moved on, or you chose to leave it), not a new question. */
 const ASK_WITHIN_MS = 24 * 60 * 60_000;
 const ASK_CHECK_MS = 60_000;
+/** Cards are shown by this extension; with it off, there are none. */
+export const cardsOn = (): boolean => extensionOn("review");
+export const CARDS_OFF = "Review cards are off (the Review extension is turned off), so nobody would see a card. Ask or tell the user in your own conversation instead, with your recommendation, and end your turn to wait for the answer.";
+
 /** The start of the key of a card `carryAsks` made. */
 const ASK_KEY = "needs:";
 
@@ -224,6 +233,7 @@ export class Cards {
         }
       }
     }
+    if (!cardsOn()) return;
     for (const s of this.fleet.sessions()) {
       if (asks.has(s.id) || covered.has(s.id) || s.closedAt !== null || s.parkedAt === null || s.subagent || s.quiet) continue;
       const age = now - s.lastActivityAt;
@@ -271,6 +281,7 @@ export class Cards {
 
   /** Add one; with a `key` already used, the card that has it, untouched. */
   add(c: NewCard): Card {
+    if (!cardsOn()) throw new FleetError(409, CARDS_OFF);
     if (!CARD_KINDS.includes(c.kind)) throw new FleetError(400, `a card's kind is one of ${CARD_KINDS.join(", ")}`);
     const title = c.title.trim().slice(0, TITLE_MAX);
     const short = c.short.trim().slice(0, SHORT_MAX);
