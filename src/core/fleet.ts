@@ -3659,6 +3659,10 @@ export class Fleet extends EventEmitter {
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
     const cwd = this.resumeDir(rec);
     if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
+    // Adopting stops the process, and what its turn left going (in-process
+    // agents, workflows, background shells) dies with it rather than moving.
+    const work = this.work.get(id);
+    if (work) throw new FleetError(409, `${work.why.replace(/ were working\b/, " are working")}, and adopting stops its process; adopt it once that finishes`);
 
     const pid = view.pid;
     // Read how it was launched before it is gone: the resume keeps its flags
