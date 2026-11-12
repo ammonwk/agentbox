@@ -1,8 +1,8 @@
 /**
  * Review: the cards sessions handed you (src/core/cards.ts), one at a time.
  *
- * A stack (cardorder.ts): what you have never put off, decisions before what
- * happened, then what you kept for later. The card on top takes three gestures, each with a
+ * A stack (cardorder.ts): decisions before what happened, and in each what
+ * you have never put off before what you kept for later. The card on top takes three gestures, each with a
  * button under it and a Shift+arrow shortcut (plain arrows navigate):
  *   right (Shift+→) — answer it: a sheet with a text box. Empty, on a card that
  *               only wanted seeing, means "seen".
