@@ -6,7 +6,8 @@ import { useSkillComplete } from "./skillcomplete";
 
 /**
  * The prompt, with `/skill` completion (skillcomplete.tsx) and, while empty,
- * earlier prompts on Up. Enter submits, Shift+Enter is a new line. Images
+ * earlier prompts on Up. Enter submits, Shift+Enter is a new line; on a touch
+ * screen Enter is a new line and the Start button submits. Images
  * pasted or dropped in attach to it. `footer` sits inside the box, under them.
  */
 export function PromptBox({
@@ -119,7 +120,7 @@ export function PromptBox({
             }
             if (skill.onKeyDown(e) || attachments.onKeyDown(e)) return;
             // Ctrl+Enter is the form's, so it does not submit twice.
-            if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !matchMedia("(pointer: coarse)").matches && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               onSubmit();
             }
