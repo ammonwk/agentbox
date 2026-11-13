@@ -412,6 +412,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
               data-ready={text.trim() ? true : undefined}
               data-rec={recording ? voice.phase : undefined}
+              data-live={voice.live || undefined}
               onMouseDown={keepKeyboard}
               {...(talks ? voice.button : {})}
               onClick={() => {

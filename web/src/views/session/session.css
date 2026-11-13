@@ -3113,6 +3113,8 @@ a.wk-item:hover {
 }
 .cmp-row .btn.cmp-go[data-rec="held"] {
   transform: scale(1.35);
+}
+.cmp-row .btn.cmp-go[data-rec="held"][data-live] {
   background: var(--danger);
   border-color: var(--danger);
 }

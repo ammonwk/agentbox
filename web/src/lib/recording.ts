@@ -49,8 +49,10 @@ export function recordVoice({ onStart, onDone, onError }: {
         else onError("nothing was recorded");
       };
       rec.onerror = () => fail("the recording failed");
+      // A microphone that was idle takes about a second to deliver audio, and
+      // nothing said before then is kept: only the recorder knows when it began.
+      rec.onstart = () => { if (!ended) onStart(); };
       rec.start(1000);
-      onStart();
     } catch (error) {
       const err = error as Error;
       fail(err.name === "NotAllowedError" ? "the microphone is blocked for this page — allow it in the browser's site settings" : `no microphone: ${err.message}`);

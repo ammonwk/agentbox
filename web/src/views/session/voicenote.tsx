@@ -29,6 +29,8 @@ type Phase = "idle" | "held" | "locked";
 
 export interface VoiceNote {
   phase: Phase;
+  /** The microphone is open: until then the button and the bar do not say "recording". */
+  live: boolean;
   /** Spread on the Send button. */
   button: {
     onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -60,6 +62,8 @@ export function useVoiceNote({ onDone, onError, working, tapStarts = false }: {
 }): VoiceNote {
   const [phase, setPhase] = useState<Phase>("idle");
   const [ms, setMs] = useState(0);
+  /** The microphone is open and what is said is being kept. */
+  const [live, setLive] = useState(false);
   /** 0–1: how far toward the lock, and toward cancel, the thumb has slid. */
   const [pull, setPull] = useState({ up: 0, left: 0 });
   const [hinting, setHinting] = useState(false);
@@ -118,17 +122,22 @@ export function useVoiceNote({ onDone, onError, working, tapStarts = false }: {
     s.swallow = true;
     s.startedAt = 0;
     setMs(0);
+    setLive(false);
     go(locked ? "locked" : "held");
     setHinting(false);
-    navigator.vibrate?.(12);
     const take = ++s.take;
     let startedAt = 0;
     s.audio = recordVoice({
-      onStart: () => { s.startedAt = startedAt = Date.now(); },
+      // The buzz and the red dot say "speak": not before the microphone is open.
+      onStart: () => {
+        s.startedAt = startedAt = Date.now();
+        setLive(true);
+        navigator.vibrate?.(12);
+      },
       onDone: (audio) => {
         // A newer take or an unmount must not receive the old recorder's callback.
         if (s.take !== take + 1) return;
-        if (Date.now() - startedAt < MIN_MS) setHinting(true);
+        if (!startedAt || Date.now() - startedAt < MIN_MS) setHinting(true);
         else cb.current.onDone(audio);
       },
       onError: (why) => {
@@ -209,8 +218,8 @@ export function useVoiceNote({ onDone, onError, working, tapStarts = false }: {
             <Icon.trash size={17} />
           </button>
         ) : null}
-        <span className="vn-rec-dot" aria-hidden />
-        <span className="vn-rec-clock">{clock}</span>
+        <span className="vn-rec-dot" data-live={live || undefined} aria-hidden />
+        <span className="vn-rec-clock">{live ? clock : "Opening microphone…"}</span>
         {phase === "held" ? (
           <span className="vn-rec-slide" style={{ transform: `translateX(${-pull.left * 28}px)`, opacity: 1 - pull.left * 0.7 }}>
             <Icon.chevronLeft size={14} /> Slide to cancel
@@ -237,7 +246,7 @@ export function useVoiceNote({ onDone, onError, working, tapStarts = false }: {
       </span>
     ) : null;
 
-  return { phase, button, click, hint: () => setHinting(true), bar, above };
+  return { phase, live: live && phase !== "idle", button, click, hint: () => setHinting(true), bar, above };
 }
 
 /**
@@ -262,6 +271,7 @@ export function VoiceButton({ voice, disabled }: {
         title="Tap to dictate, or hold while you speak"
         disabled={disabled}
         data-rec={live ? voice.phase : undefined}
+        data-live={voice.live || undefined}
         {...voice.button}
         onClick={() => {
           if (voice.click()) return;
