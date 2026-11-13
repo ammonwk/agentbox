@@ -54,11 +54,11 @@
  * refills the Fable weekly and hands back what Fable used of the week). It is
  * worth the most spent on a Fable weekly that is used up, early in a week:
  * the points it hands back are only of use while that week still runs. So a
- * session of that model goes first to the accounts holding one, and among
- * them to the one that can use the rest of that weekly up at the gentlest
- * pace before its week resets (`Candidate.refill`): the most of it used
- * already, the longest until the reset. One account at a time is run down,
- * with week to spare, rather than every one a little.
+ * session of that model goes first to the accounts holding one
+ * (`Candidate.refill`), and among them to the one with the most of that
+ * weekly used already, then the one whose week resets last. One account at a
+ * time is run down to its limit, starting with the most week to spare, and
+ * it is not left half used when another account's week turns over.
  */
 
 import { claimFor } from "./claim";
@@ -222,7 +222,6 @@ function hoursLeft(w: UsageWindow, now: number): number {
 }
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
-const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
 /**
  * How fast a window is filling, in its points an hour: from the reading about
@@ -334,8 +333,8 @@ function evaluate(
       pace: binding.pace && round1(binding.pace.perHour),
       runsOutAt: binding.runsOutAt,
     },
-    perHour: binding && round3(Math.max(0, binding.left) / Math.max(hoursLeft(binding.w, now), 0.25)),
-    refill: own ? { label: own.w.label, used: own.used, perHour: round3((100 - own.used) / Math.max(hoursLeft(weekly ?? own.w, now), 0.25)) } : null,
+    perHour: binding && Math.round((Math.max(0, binding.left) / Math.max(hoursLeft(binding.w, now), 0.25)) * 1000) / 1000,
+    refill: own ? { label: own.w.label, used: own.used, hoursLeft: round1(hoursLeft(weekly ?? own.w, now)) } : null,
     perWeekly,
     short: null,
     shortEffective: null,
@@ -446,10 +445,6 @@ function fits(c: Candidate): boolean {
   return c.shortLoadTo === null ? c.legRoom >= need : 100 - c.legRoom + need <= c.shortLoadTo;
 }
 
-/** The pace that uses up the model's own weekly before the week resets,
- *  where a reset is held for it; none held, or it is used up: last. */
-const refillPace = (c: Candidate): number => c.refill?.perHour ?? Infinity;
-
 /** When its budget resets, for ordering. One that has not started, or has
  *  reset since its last reading, loses nothing by waiting: last. */
 function due(c: Candidate, now: number): number {
@@ -461,8 +456,8 @@ function due(c: Candidate, now: number): number {
  * The ordering. First, whether the account has room for this session
  * (`fits`): one without would put it at risk of stopping mid-work. Among
  * those that have room, the ones holding a reset for the model's own weekly
- * (`Candidate.refill`), the gentlest pace to use it up first; then the one
- * whose budget resets soonest — what expires first is spent first — then the
+ * (`Candidate.refill`), the most of it used first, then the longest until
+ * the week resets; then the one whose budget resets soonest — what expires first is spent first — then the
  * most of it left per hour until then. Among
  * those that do not, the most room (the least overrun, below zero), since
  * that is the least likely to stall. Then fewer outstanding claims, then name.
@@ -473,14 +468,14 @@ function rank(candidates: Candidate[], now: number): Candidate[] {
   const fit = (c: Candidate): number => Number(fits(c));
   const known = (c: Candidate): number => (c.legRoom === null ? 0 : 1);
   // Infinity − Infinity is NaN, which a sort cannot use.
-  const less = (x: number, y: number): number => (x === y ? 0 : x - y);
-  const sooner = (a: Candidate, b: Candidate): number => less(due(a, now), due(b, now));
-  const gentler = (a: Candidate, b: Candidate): number => less(refillPace(a), refillPace(b));
+  const sooner = (a: Candidate, b: Candidate): number => (due(a, now) === due(b, now) ? 0 : due(a, now) - due(b, now));
+  const refill = (a: Candidate, b: Candidate): number =>
+    Number(!!b.refill) - Number(!!a.refill) || (b.refill?.used ?? 0) - (a.refill?.used ?? 0) || (b.refill?.hoursLeft ?? 0) - (a.refill?.hoursLeft ?? 0);
   const order = (group: Candidate[]): Candidate[] =>
     [...group].sort(
       (a, b) =>
         fit(b) - fit(a) ||
-        (fit(a) ? gentler(a, b) || sooner(a, b) || (b.perHour ?? -1) - (a.perHour ?? -1) : 0) ||
+        (fit(a) ? refill(a, b) || sooner(a, b) || (b.perHour ?? -1) - (a.perHour ?? -1) : 0) ||
         known(b) - known(a) ||
         b.score - a.score ||
         a.outstanding - b.outstanding ||
@@ -601,9 +596,13 @@ function explain(chosen: Candidate, eligible: Candidate[], now: number, unmetere
     return `${chosen.label} is the only one with room in its 5-hour window for it (${chosen.legRoom} vs ${next.label} ${next.legRoom ?? "unknown"})`;
   }
   const r = chosen.refill;
-  if (r && r.perHour < refillPace(next)) {
-    const other = next.refill ? `${next.label} ${next.refill.used}% used, ${next.refill.perHour.toFixed(2)}%/h` : `${next.label} holds none, or has used its up`;
-    return `${chosen.label} holds a reset for its ${r.label.toLowerCase()} and is the nearest to using that up with week to spare (${r.used}% used, ${r.perHour.toFixed(2)}%/h does it before its week resets; ${other}), and it has room in its 5-hour window`;
+  if (r) {
+    const what = `${chosen.label} holds a reset for its ${r.label.toLowerCase()}`;
+    const room = "and it has room in its 5-hour window";
+    const n = next.refill;
+    if (!n) return `${what} (${r.used}% used; ${next.label} holds none, or has used its up), ${room}`;
+    if (r.used > n.used) return `${what} and has used the most of it (${r.used}%; ${next.label} ${n.used}%), ${room}`;
+    return `${what}, ${r.used}% used like ${next.label}'s, and its week resets last (in ${Math.round(r.hoursLeft)}h; ${next.label}'s in ${Math.round(n.hoursLeft)}h), ${room}`;
   }
   const b = chosen.budget;
   if (b && due(chosen, now) < due(next, now)) {
