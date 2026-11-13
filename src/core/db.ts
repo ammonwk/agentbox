@@ -506,6 +506,17 @@ const MIGRATIONS: readonly string[] = [
   // 43 — when a card's answer was typed into its asker; it is delivered only
   // once the asker takes a turn on it (src/core/cards.ts).
   `ALTER TABLE cards ADD COLUMN typed_at INTEGER;`,
+  // 44 — the sessions started into a PR to build onto its branch without
+  // holding it (src/core/prclaims.ts).
+  `
+  CREATE TABLE IF NOT EXISTS pr_helpers (
+    repo       TEXT NOT NULL COLLATE NOCASE,
+    number     INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    at         INTEGER NOT NULL,
+    PRIMARY KEY (repo, number, session_id)
+  );
+  `,
 ];
 
 function migrate(d: Database) {

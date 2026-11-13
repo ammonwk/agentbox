@@ -320,6 +320,19 @@ interface RawPr {
   base: { ref: string };
 }
 
+/**
+ * The branch to build onto `repo#number` on, as GitHub has it now (a start's
+ * `into`): refused for a PR that is not open, or whose branch is a fork's,
+ * which origin's clone cannot push to.
+ */
+export async function prHeadBranch(repo: string, number: number): Promise<string> {
+  const got = await get<RawPr & { head: { repo: { full_name: string } | null } }>(`/repos/${repo}/pulls/${number}`);
+  const p = got!.body;
+  if (p.state !== "open") throw new Error(`${repo}#${number} is ${p.merged_at ? "merged" : "closed"}`);
+  if (p.head.repo?.full_name.toLowerCase() !== repo.toLowerCase()) throw new Error(`${repo}#${number} is from a fork (${p.head.repo?.full_name ?? "deleted"}): its branch cannot be pushed to from here`);
+  return p.head.ref;
+}
+
 function toStored(repo: string, p: RawPr): StoredPr {
   return {
     repo,

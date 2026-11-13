@@ -19,6 +19,12 @@
  * live session holds the PR, and the refusal names it. When a session is
  * handed over (`agentbox handover`) the claims go to the successor, as its
  * children and cards do.
+ *
+ * A session started `--into` a PR helps it (`pr_helpers`): it works on the
+ * PR's branch, pushes there and leaves the PR to its holder. A helper on the
+ * branch is not a holder by branch, and a start into a PR another live
+ * session holds is refused unless that session (or another of its helpers)
+ * is the one starting it, so two sessions on one branch know of each other.
  */
 
 import { getDb } from "./db";
@@ -99,17 +105,32 @@ const holds = (s: Session | undefined): s is Session =>
 
 interface Row { repo: string; number: number; session_id: string; at: number }
 
+/** The live sessions helping a PR, oldest first. */
+export function prHelpers(sessions: readonly Session[], pr: PrRef): string[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const rows = getDb().query("SELECT session_id FROM pr_helpers WHERE lower(repo) = lower(?) AND number = ? ORDER BY at").all(pr.repo, pr.number) as { session_id: string }[];
+  return rows.map((r) => r.session_id).filter((id) => holds(byId.get(id)));
+}
+
+/** `sessionId` helps the PR from now on. */
+export function helpPr(pr: PrRef, sessionId: string, now: number): void {
+  getDb().run("INSERT OR IGNORE INTO pr_helpers (repo, number, session_id, at) VALUES (?,?,?,?)", [pr.repo, pr.number, sessionId, now]);
+}
+
 /** Every PR a live session holds: those said, then those held by a branch
  *  that nobody said otherwise about. `byBranch` is `branchHolders` (prs.ts). */
 export function prClaims(sessions: readonly Session[], byBranch: readonly Omit<PrClaim, "how">[]): PrClaim[] {
   const byId = new Map(sessions.map((s) => [s.id, s]));
+  const helping = new Set((getDb().query("SELECT repo, number, session_id FROM pr_helpers").all() as { repo: string; number: number; session_id: string }[])
+    .map((h) => `${h.repo.toLowerCase()}#${h.number}@${h.session_id}`));
   const rows = getDb().query("SELECT * FROM pr_claims ORDER BY at").all() as Row[];
   const out: PrClaim[] = rows
     .filter((r) => holds(byId.get(r.session_id)))
     .map((r) => ({ repo: r.repo, number: r.number, sessionId: r.session_id, how: "said" as const, at: r.at }));
   const said = new Set(out.map((c) => `${c.repo.toLowerCase()}#${c.number}`));
   for (const b of byBranch) {
-    if (!said.has(`${b.repo.toLowerCase()}#${b.number}`) && holds(byId.get(b.sessionId)) && !prReleased(b.sessionId, b)) out.push({ ...b, how: "branch" });
+    const key = `${b.repo.toLowerCase()}#${b.number}`;
+    if (!said.has(key) && !helping.has(`${key}@${b.sessionId}`) && holds(byId.get(b.sessionId)) && !prReleased(b.sessionId, b)) out.push({ ...b, how: "branch" });
   }
   return out;
 }
@@ -227,6 +248,7 @@ export function movePrClaims(from: string, to: string): number {
     db.run(`INSERT OR IGNORE INTO pr_releases (session_id, repo, number)
       SELECT ?, r.repo, r.number FROM pr_releases r WHERE r.session_id = ?
       AND NOT EXISTS (SELECT 1 FROM pr_claims c WHERE c.session_id = ? AND lower(c.repo) = lower(r.repo) AND c.number = r.number)`, [to, from, to]);
+    db.run("UPDATE OR IGNORE pr_helpers SET session_id = ? WHERE session_id = ?", [to, from]);
     db.run("UPDATE waits SET session_id = ? WHERE session_id = ? AND told_at IS NULL AND ended IS NOT 'cancelled'", [to, from]);
     return moved;
   })();

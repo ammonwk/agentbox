@@ -303,11 +303,27 @@ export function createWorktree(
  * worktreeRoot/<id>. `created` says which, because only a worktree agentbox
  * cut belongs to the session (and may be reclaimed with it); someone else's
  * is only borrowed.
+ *
+ * It starts at the branch's newest commit, not wherever this clone last
+ * fetched it: origin's is fetched first, and a local copy that is behind it
+ * is moved up to it (in its checkout only when that has nothing uncommitted).
+ * A local copy with commits of its own is someone's work and stays as it is;
+ * offline, or for a branch origin does not have, the local copy is used.
  */
 export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: number): { path: string; created: boolean } {
   const { path: repoPath } = ensureRepoClone(repo);
   run(["git", "worktree", "prune"], repoPath);
   const existing = listWorktreesOf(repoPath).find((w) => w.branch === branch && existsSync(w.path));
+  const fetched = run(["git", "fetch", "--quiet", "origin", branch], repoPath).code === 0
+    || (pr !== undefined && run(["git", "fetch", "--quiet", "origin", `pull/${pr}/head`], repoPath).code === 0);
+  const theirs = fetched ? run(["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], repoPath).stdout.trim() : "";
+  const ours = run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], repoPath).stdout.trim();
+  const behind = !!theirs && !!ours && ours !== theirs && run(["git", "merge-base", "--is-ancestor", ours, theirs], repoPath).code === 0;
+  if (theirs && !ours) run(["git", "branch", branch, theirs], repoPath);
+  else if (behind && !existing) run(["git", "update-ref", `refs/heads/${branch}`, theirs, ours], repoPath);
+  else if (behind && !run(["git", "status", "--porcelain", "--untracked-files=no"], existing!.path).stdout.trim()) {
+    run(["git", "merge", "--ff-only", "--quiet", theirs], existing!.path);
+  }
   if (existing) return { path: existing.path, created: false };
   return { path: createWorktree(repo, id, branch, branch, pr).path, created: true };
 }

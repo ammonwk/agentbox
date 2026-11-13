@@ -154,12 +154,12 @@ function repoOfDir(repos: { id: string; checkoutRoot?: string }[], dir: string):
   return repos.find((r) => r.checkoutRoot === root)?.id ?? null;
 }
 
-/** `agentbox claude [--account X] [--model M] [--effort E] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF | --worktree | --branch B] [--detach] [prompt…]`
+/** `agentbox claude [--account X] [--model M] [--effort E] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF | --worktree | --branch B | --into PR] [--detach] [prompt…]`
  *
  *  A mistyped option is refused, not taken for a switch: `--acount work`
  *  would otherwise start on the balancer's pick with "work" in the prompt. */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
-  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "effort", "claim", "parent", "repo", "ref", "branch"], ["detach", "org", "personal", "worktree", "help", "h"]);
+  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "effort", "claim", "parent", "repo", "ref", "branch", "into"], ["detach", "org", "personal", "worktree", "help", "h"]);
   const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
   if (flags.has("help") || flags.has("h")) {
@@ -212,6 +212,9 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       repo: str("repo"),
       ref: str("ref"),
       claim: str("claim"),
+      // Onto a PR's branch, to push there and open none of its own; a bare
+      // number is the repo of the directory it is run in (`cwd` above).
+      into: str("into"),
       // Started from inside another session, it is that session's child;
       // `--parent` names it outright, for a program no session runs.
       callerPid: process.pid,
@@ -436,7 +439,7 @@ const USAGE = `usage: agentbox <command>
   start                 start the backend in the background, if needed
   service install       keep the backend available at login (macOS) or boot (Linux)
   claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--effort E] [--parent ID] [--detach]
-         [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B] [prompt…]
+         [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B | --into PR] [prompt…]
                         start a session here and attach this terminal to it
                         (detach: Ctrl-b d); agentbox picks the account;
                         --effort how hard it thinks, one of the provider's levels (codex xhigh);
@@ -446,7 +449,10 @@ const USAGE = `usage: agentbox <command>
                         --repo runs in that registered repo instead of here, --ref at that
                         branch, tag or commit in a worktree of its own (detached);
                         --worktree in a new worktree of the repo (here, or --repo's), never
-                        the shared checkout; --branch B in the worktree of branch B
+                        the shared checkout; --branch B in the worktree of branch B;
+                        --into PR on that PR's branch, fetched now (its parent's checkout
+                        when that is on it): it pushes there, opens no PR, and leaves the
+                        PR to its holder, who is the only one besides you who may start it
   kill                  stop the server; sessions keep running in tmux
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
@@ -515,9 +521,11 @@ pull requests and issues (who has one: no two sessions work the same one; an iss
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all); its
                                      checks waits go too, a --merged wait stays
-  pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1)
+  pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1),
+                                     and the sessions helping it (started --into it)
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
+  claude|codex|… --into <n|…> …      start a helper that builds onto the PR's branch and opens no PR of its own
 
 your time (src/core/yourtime.ts):
   your-time [--days N] [--json]   per day: the messages, cards, MFA codes and logins you gave

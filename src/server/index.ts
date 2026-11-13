@@ -57,8 +57,8 @@ import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards, cardsOn, moveCards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent, Session } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
-import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
-import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
+import { branchHolders, openPrs, prHeadBranch, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
+import { claimPr, helpPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, prHelpers, releasePr, transferPr } from "../core/prclaims";
 import { removeDetachedWorktree, repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
@@ -427,6 +427,40 @@ function speaker(b: Record<string, unknown>): string | null {
  *  process, a hook or a script, none of which has a terminal. */
 function byYou(req: Request, b: Record<string, unknown>): boolean {
   return !authenticatedSession(req) && (req.headers.has("origin") || b.tty === true);
+}
+
+/**
+ * Where a start `into` a PR runs, and the line its first prompt opens with:
+ * the PR's branch as GitHub has it now, in the checkout that has it (its
+ * parent's, when the parent is on it) or a new worktree, and told to push
+ * there and leave the PR to its holder. Refused while a live session other
+ * than the one starting it, or one of that session's fellow helpers, holds
+ * the PR: it is that session's to fan out, not a stranger's to pile onto.
+ * You may, from a terminal or the board.
+ */
+async function intoPlace(b: Record<string, unknown>, callerPid: number | undefined, you: boolean) {
+  if (b.claim !== undefined || b.repo || b.repoId || b.ref || b.branch || b.worktree) {
+    throw new HttpError(400, "into is where it runs: not with claim, repo, ref, branch or worktree");
+  }
+  const pr = prNamed({ pr: String(b.into), cwd: b.cwd }, null);
+  const repo = repoNamed(pr.repo);
+  if (!repo) throw new HttpError(404, `not started: ${pr.repo} is not a registered repo here (add it in Settings)`);
+  let branch: string;
+  try {
+    branch = await prHeadBranch(pr.repo, pr.number);
+  } catch (e) {
+    throw new HttpError(409, `not started: ${pr.repo}#${pr.number}: ${(e as Error).message}`);
+  }
+  const sessions = fleet.sessions();
+  const parent = optionalString(b, "parent") ?? (callerPid ? fleet.callerOf(callerPid) : null);
+  const holder = holderOf(prClaimsNow(), pr.repo, pr.number)?.sessionId ?? null;
+  if (holder && !you && holder !== parent && !(parent && prHelpers(sessions, pr).includes(parent))) {
+    throw new HttpError(409, `not started: ${pr.repo}#${pr.number} is held by ${holder}${parent ? `, not by ${parent}, which is starting this` : ""}. Only its holder and its helpers start sessions into it: ask ${holder} (\`agentbox send ${holder} …\`).`);
+  }
+  const line = `[agentbox: you build onto PR ${pr.repo}#${pr.number}, on its branch ${branch}. Commit your work on that branch and push it there `
+    + `(\`git pull --rebase\`, then \`git push origin HEAD:${branch}\`); other sessions work on it too, maybe in this very checkout, so commit only your own files, by path. `
+    + `Open no pull request of your own, and leave its review and merge to the session that holds #${pr.number} (\`agentbox pr who ${pr.number}\`${holder ? `: ${holder} now` : ""}).]`;
+  return { pr, line, place: { repoId: repo.id, branch, pr: pr.number, cwd: undefined } };
 }
 
 /** PRs a session is being started on, until it exists to hold them. */
@@ -862,8 +896,9 @@ const router = new Router(mapError)
       // A repo by name: its id, `owner/name` or ref.
       const named = typeof b.repo === "string" && b.repo ? repoNamed(b.repo) : null;
       if (typeof b.repo === "string" && b.repo && !named) throw new HttpError(404, `no repo ${b.repo} is registered here`);
-      const ref = optionalString(b, "ref");
-      const branch = optionalString(b, "branch");
+      const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined;
+      const into = b.into !== undefined ? await intoPlace(b, callerPid, byYou(req, b)) : null;
+      const prompt = typeof b.prompt === "string" && b.prompt ? b.prompt : undefined;
       const asked = {
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
@@ -871,17 +906,18 @@ const router = new Router(mapError)
         cwd: optionalString(b, "cwd"),
         repoId: named?.id ?? optionalString(b, "repoId"),
         worktree: b.worktree === true,
-        branch,
-        ref,
+        branch: optionalString(b, "branch"),
+        ref: optionalString(b, "ref"),
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
         devServer: b.devServer === true,
-        prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+        prompt,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
         accountId: optionalString(b, "accountId") ?? null,
         scope: scopeOf(b),
-        callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
+        callerPid,
         parent: optionalString(b, "parent"),
+        ...(into ? { ...into.place, prompt: prompt ? `${into.line}\n\n${prompt}` : into.line } : {}),
       };
       // Other providers to try, in order, when its own has no account with room:
       // each on its own default model, effort and account.
@@ -890,6 +926,7 @@ const router = new Router(mapError)
         ? { session: await fleet.spawnFirstWithRoom([asked, ...others.map((p) => ({ ...asked, provider: p, model: undefined, effort: undefined, accountId: null }))]) }
         : await fleet.spawn(asked);
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
+      if (into) helpPr(into.pr, out.session.id, Date.now());
       // An extension's conversation is its line to you: what you say there is yours, as in a session you started.
       if (byYou(req, b) || b.conversation === true) recordYourAct("launch", out.session.id);
       scheduleHot();
@@ -924,7 +961,7 @@ const router = new Router(mapError)
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);
     const pr = prNamed(b, speaker(b));
-    return json({ ...pr, claim: holderOf(prClaimsNow(), pr.repo, pr.number) });
+    return json({ ...pr, claim: holderOf(prClaimsNow(), pr.repo, pr.number), helpers: prHelpers(fleet.sessions(), pr) });
   })
   .add("POST", "/api/prs/claim", async ({ req }) => {
     const b = await readBody(req);

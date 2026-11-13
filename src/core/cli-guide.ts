@@ -216,7 +216,10 @@ your user for a fresh 6-digit MFA code, saying what it is for, then:
   do not work it as well. To start a session on a PR, start it with
   \`--claim <n>\` (\`agentbox claude --detach --claim 8653 '…'\`): it has the
   PR from its first moment, or is not started. Reading or reviewing a PR
-  needs no claim. A claim lapses when its session stops or closes. Your own
+  needs no claim. To have another session help with your PR, start it with
+  \`--into <your PR>\` (\`agentbox claude --detach --into 8653 '…'\`): it
+  works on your branch, pushes there and opens no PR of its own, so one area
+  stays one PR. A claim lapses when its session stops or closes. Your own
   id is \`$AGENTBOX_SESSION\`; wherever ls, show, pr who and pr claims name
   you, the id has "(you)" after it.
 

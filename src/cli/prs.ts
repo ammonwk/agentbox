@@ -44,7 +44,7 @@ export async function pr(api: Api, args: string[]): Promise<number> {
     }
     case "who": {
       if (!rest[0]) throw new Error("pr who needs the pull request: its number, owner/repo#number, or its URL");
-      const w = await api<{ repo: string; number: number; claim: PrClaim | null }>("POST", "/api/prs/who", body);
+      const w = await api<{ repo: string; number: number; claim: PrClaim | null; helpers: string[] }>("POST", "/api/prs/who", body);
       const you = await me(api);
       if (flags.has("json")) console.log(JSON.stringify(w.claim ? { ...w, claim: { ...w.claim, you: w.claim.sessionId === you } } : w));
       else if (!w.claim) console.log(`${w.repo}#${w.number}  nobody`);
@@ -52,6 +52,7 @@ export async function pr(api: Api, args: string[]): Promise<number> {
         const s = (await api<AppState>("GET", "/api/state")).sessions.find((x) => x.id === w.claim!.sessionId);
         console.log(`${w.repo}#${w.number}  ${idYou(w.claim.sessionId, you)}  ${HOW[w.claim.how]}  ${s?.status ?? "?"}  ${s?.label ?? s?.title ?? ""}`);
       }
+      if (!flags.has("json") && w.helpers.length) console.log(`  helped by ${w.helpers.map((h) => idYou(h, you)).join(", ")} (started --into it)`);
       return w.claim ? 0 : 1;
     }
     case "claims":
