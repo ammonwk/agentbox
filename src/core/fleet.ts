@@ -3004,7 +3004,9 @@ export class Fleet extends EventEmitter {
 
   /** Whose sessions may run on an account: yours on your own, the org's on
    *  a login in its pool, both on one of yours you shared. */
-  scopesOf(accountId: string): Scope[] {
+  scopesOf(homeId: string): Scope[] {
+    // A twin home is its owner's login, in every scope its owner is in.
+    const accountId = this.ownerOf(homeId);
     const a = getAccount(accountId);
     if (!a) return [];
     const out: Scope[] = isOrgAccount(a) ? [] : ["personal"];
