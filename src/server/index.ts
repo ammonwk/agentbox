@@ -449,7 +449,7 @@ async function intoPlace(b: Record<string, unknown>, callerPid: number | undefin
   try {
     branch = await prHeadBranch(pr.repo, pr.number);
   } catch (e) {
-    throw new HttpError(409, `not started: ${pr.repo}#${pr.number}: ${(e as Error).message}`);
+    throw new HttpError(409, `not started: ${(e as Error).message}`);
   }
   const sessions = fleet.sessions();
   const parent = optionalString(b, "parent") ?? (callerPid ? fleet.callerOf(callerPid) : null);

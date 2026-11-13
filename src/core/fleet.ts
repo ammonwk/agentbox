@@ -139,7 +139,7 @@ import { STOP_LOOKBACK_MS, stoppedSince } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock, retrying } from "./attention";
-import { isAgentSent, PROMPT_PREVIEW } from "./sent";
+import { isAgentSent, PROMPT_PREVIEW, withoutNotes } from "./sent";
 import { parentModelFor, parentModelNow } from "./subagent-models";
 import { encodeParent, PARENT_ENV, type ParentModel } from "../subagents/parent";
 import { readBtwPanel } from "./providers/claude-btw";
@@ -4849,7 +4849,8 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: str
  */
 function headline(prompt: string | null | undefined): string | null {
   if (!prompt) return null;
-  const line = prompt.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  // What it was asked, not the notes agentbox put before that (`--into`'s).
+  const line = (withoutNotes(prompt) || prompt).split("\n").map((l) => l.trim()).find((l) => l.length > 0);
   if (!line || line.startsWith("<")) return null;
   if (line.length <= 80) return line;
   const cut = line.slice(0, 80);
