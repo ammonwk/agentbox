@@ -641,6 +641,11 @@
   padding-top: 11px;
   padding-bottom: 11px;
   border-radius: 14px;
+  /* Every row laid out at its real height. A placeholder for the rows out of
+   * view was wrong whenever a row's height was not the guess, and iOS Safari
+   * does not hold the scroll still when the rows above it change size: the
+   * list jumped on coming back to it and jerked on scrolling up. */
+  content-visibility: visible;
 }
 /* A scheduled session has no last message: one line, no gap under it. */
 .sv[data-rail="full"] .rail-row.rail-sched {
