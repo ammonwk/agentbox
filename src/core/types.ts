@@ -265,6 +265,13 @@ export interface Candidate {
   } | null;
   /** Weekly points left of `budget` per hour until it resets. */
   perHour: number | null;
+  /** The model being started has a weekly of its own here that is not used
+   *  up, and the account holds a reset for it (Claude's "Fable reset", which
+   *  refills it and hands back what Fable used of the week): that weekly's
+   *  percent `used`, and the percent an hour (`perHour`) that uses the rest
+   *  up before the account's week resets. These accounts take the model's
+   *  sessions first, lowest `perHour` first. Null otherwise. */
+  refill?: { label: string; used: number; perHour: number } | null;
   /** How many of each window's points one weekly point is here (rates.ts),
    *  by window id: what claims were turned into each window's points with. */
   perWeekly: Record<string, number>;

@@ -2930,6 +2930,7 @@ export class Fleet extends EventEmitter {
           samples: usageSamplesSince(since, a.id).map((r) => ({ windowId: r.windowId, at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt })),
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
+          resets: usage?.resets?.credits,
           auth: this.deps.usage.authOf?.(a.id),
           // A free model's limit is the model's, not the account's plan; a
           // refused login is a stop of its own, no session needing to die on it.
