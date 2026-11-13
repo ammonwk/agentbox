@@ -274,11 +274,10 @@ const PASTE_POLL_MS = 30;
 /** How long to look for the message's own words in the pane before settling
  *  for any row the paste changed: a TUI that collapses a long paste shows a marker. */
 const PASTE_SHOWN_MS = 2_000;
-/** A pane that shows nothing of a paste for this long has not taken it. */
-const PASTE_WAIT_MS = 10_000;
-/** How long a TUI has to turn bracketed paste on: one starting on a loaded
- *  machine draws its splash for many seconds before it does. */
-const BRACKETED_WAIT_MS = 60_000;
+/** How long a TUI has to show a paste, or to turn bracketed paste on. On a
+ *  loaded machine a starved TUI takes many seconds to draw either; 10s left
+ *  a message typed in its box with Enter never pressed. */
+const STARVED_WAIT_MS = 60_000;
 /** How long one Enter has to empty the input box, and how many are pressed. */
 const ENTER_WAIT_MS = 3_000;
 const ENTER_TRIES = 3;
@@ -307,14 +306,14 @@ export class Unsubmitted extends Error {}
  */
 export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
   if (!opts.pieces && /[\r\n]/.test(text) && !(await bracketedPasteOn(name))) {
-    throw new Unsubmitted(`its pane did not turn bracketed paste on in ${BRACKETED_WAIT_MS / 1000}s, so nothing was typed: each line would have gone out as a message of its own`);
+    throw new Unsubmitted(`its pane did not turn bracketed paste on in ${STARVED_WAIT_MS / 1000}s, so nothing was typed: each line would have gone out as a message of its own`);
   }
   const before = screenRows(name);
   if (opts.pieces) pasteInPieces(name, text, opts.pieces);
   else pasteBuffers(name, [text]);
   const draft = await draftRow(name, text, before);
   if (!draft) {
-    throw new Unsubmitted(`its pane showed nothing of the message for ${PASTE_WAIT_MS / 1000}s, so Enter was not pressed: a dialog may be up, or it is not reading its terminal`);
+    throw new Unsubmitted(`its pane showed nothing of the message for ${STARVED_WAIT_MS / 1000}s, so Enter was not pressed: a dialog may be up, or it is not reading its terminal`);
   }
   await submit(name, draft);
 }
@@ -348,7 +347,7 @@ async function submit(name: string, draft: DraftRow): Promise<void> {
 const screenRows = (name: string): string[] => (capture(name) ?? "").split("\n");
 
 async function bracketedPasteOn(name: string): Promise<boolean> {
-  const deadline = Date.now() + BRACKETED_WAIT_MS;
+  const deadline = Date.now() + STARVED_WAIT_MS;
   for (;;) {
     const r = await tmuxAsync(["display-message", "-p", "-t", `=${name}:`, "#{bracket_paste_flag}"]);
     if (r.stdout.trim() === "1") return true;
@@ -395,7 +394,7 @@ async function draftRow(name: string, text: string, before: string[]): Promise<D
     const waited = Date.now() - started;
     const found = shown ?? (waited >= PASTE_SHOWN_MS ? changed[0] : undefined);
     if (found) return { index: found.index, frame: found.frame, words: found.words, below: rowsBelow(rows, found.index) };
-    if (waited >= PASTE_WAIT_MS) return null;
+    if (waited >= STARVED_WAIT_MS) return null;
     await Bun.sleep(PASTE_POLL_MS);
   }
 }
