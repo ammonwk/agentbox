@@ -239,7 +239,7 @@ address that connects only to the nonprod cluster's members
 (`*.9b4l8.mongodb.net:27017`). The host is terraform's
 (`plaibook-platform/infrastructure/ssm-jump-host.tf`) and keeps none of this
 if it is replaced: run the script again over SSM, with a key from
-`ssh ubuntu@54.84.189.218 sudo headscale preauthkeys create --tags
+`ssh headscale sudo headscale preauthkeys create --tags
 tag:atlas-proxy`; if its address changed, change it in `invite.sh` and
 send everyone a new invite. No security group or access
 list changed for it: Tailscale needs only outbound 443 (its DERP relays,
@@ -252,7 +252,11 @@ since the host allows no UDP out).
 **The headscale box** (EC2 i-0fc452f9ad83f9f6d, t4g.micro, Ubuntu 24.04 arm64,
 in its own VPC vpc-0855b10b572742f35, Elastic IP 54.84.189.218, security group
 sg-0d1060f954b4c8803 with 443 open; tagged `ManagedBy=manual-agentbox`, not
-terraform; SSH as `ubuntu@54.84.189.218`). To rebuild it: the headscale
+terraform). SSH reaches it only over the tailnet, as `ubuntu@100.64.0.1`
+from one of Ammon's devices (`tag:server` in the policy; fedora's
+`~/.ssh/config` names it `headscale`, through tailscale-work, with
+`HostKeyAlias 54.84.189.218`); with the tailnet down, Session Manager
+(its SSM agent is registered). To rebuild it: the headscale
 v0.29.5 arm64 .deb from GitHub's releases and Ubuntu's `caddy`; the shipped
 `/etc/headscale/config.yaml` with `server_url:
 https://headscale.plaibook.tech`, `listen_addr: 127.0.0.1:8080`,
