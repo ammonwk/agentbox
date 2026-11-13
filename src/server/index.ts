@@ -1039,7 +1039,7 @@ const router = new Router(mapError)
     const parent = b.parent === null ? null : typeof b.parent === "string" ? b.parent : undefined;
     const pinOrder = b.pinOrder === null ? null : typeof b.pinOrder === "number" && Number.isFinite(b.pinOrder) ? b.pinOrder : undefined;
     const bookmarked = typeof b.bookmarked === "boolean" ? b.bookmarked : undefined;
-    const s = await fleet.patch(params.id!, { label, parent, pinOrder, bookmarked });
+    const s = await fleet.patch(params.id!, { label, parent, pinOrder, bookmarked, scope: scopeOf(b) });
     scheduleHot();
     scheduleCold();
     return json(s);

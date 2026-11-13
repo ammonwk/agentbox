@@ -4480,11 +4480,18 @@ export class Fleet extends EventEmitter {
 
   async patch(
     id: string,
-    p: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean },
+    p: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean; scope?: Scope },
   ): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const patch: Partial<SessionRecord> = {};
+    if (p.scope !== undefined && p.scope !== rec.scope) {
+      // Its account has to be one the new scope may run on, as every placement asks.
+      if (rec.accountId && !this.scopesOf(rec.accountId).includes(p.scope)) {
+        throw new FleetError(409, `${id} runs on ${getAccount(rec.accountId)?.label ?? rec.accountId}, which is not ${p.scope === "org" ? "in the org's pool" : "one of yours"}`);
+      }
+      patch.scope = p.scope;
+    }
     if (p.label !== undefined) patch.label = p.label?.trim() || null;
     if (p.pinOrder !== undefined) patch.pinOrder = p.pinOrder;
     if (p.bookmarked !== undefined) patch.bookmarkedAt = p.bookmarked ? (rec.bookmarkedAt ?? this.now()) : null;

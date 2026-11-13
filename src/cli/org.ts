@@ -15,6 +15,8 @@ agentbox org init <name> --store <mongodb uri> [--skills owner/repo]
                                              start an org (its store's database in the URI's path); prints its invite
 agentbox org join <invite>                   join the org an invite is for
 agentbox org default org|personal            where a session starts when it does not say (--org, --personal) and has no parent
+agentbox org scope org|personal <session>...
+                                             move sessions into the org (seen and messaged by its members) or out of it
 agentbox org env [NAME=value | NAME=]...     the variables every session gets (shown by name); set or remove some
 agentbox org invite                          the invite for the next member: it is the org's store and key, send it privately
 agentbox org share <account>                 put an account's login in the org's pool; it stays yours
@@ -75,6 +77,22 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       await api("PUT", "/api/settings", { scope });
       console.log(`sessions start ${scope === "org" ? `in ${readOrg()?.name ?? "the org"}` : "on your own accounts"} unless they say otherwise`);
       return 0;
+    }
+    case "scope": {
+      const [scope, ...ids] = words;
+      if ((scope !== "org" && scope !== "personal") || !ids.length) throw new Error("org scope org|personal <session>...");
+      await ensureServer();
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          await api("PATCH", `/api/sessions/${encodeURIComponent(id)}`, { scope });
+          console.log(`${id}: ${scope}`);
+        } catch (e) {
+          failed++;
+          console.error(`${id}: ${(e as Error).message}`);
+        }
+      }
+      return failed ? 1 : 0;
     }
     case "env": {
       const org = readOrg();

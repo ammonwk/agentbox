@@ -55,7 +55,9 @@ caller asks for the session's own. A start says `scope` (`--org` /
 without a parent, `settings.scope` (`agentbox org default org|personal`). A
 schedule keeps the scope it was made with, or takes the default when it
 starts. A session started outside agentbox is personal, unless its home is
-the pool's mirror of someone else's login. Scope decides:
+the pool's mirror of someone else's login. `agentbox org scope
+org|personal <session>...` moves a session from one to the other later,
+refused when its account is not one the new scope may run on. Scope decides:
 
 - **which accounts it may run on** (`Fleet.scopesOf`): a personal session on
   your own accounts, an org session on the logins in the pool. A login of
