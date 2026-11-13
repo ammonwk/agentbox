@@ -1,7 +1,7 @@
 #!/bin/bash
 # The org store's proxy (docs/org.md "The tailnet"): run as root on plaibook-ssm-jump, the
 # host in the VPC whose NAT addresses Atlas admits. It joins the team tailnet as atlas-proxy
-# and serves SOCKS5 on its tailnet address, port 1080, to the nonprod cluster's members only.
+# and serves SOCKS5 on its tailnet address, port 1080, to the members of the cluster the store is on (production's, rmplanner) only.
 #   atlas-proxy.sh <headscale pre-auth key, tagged tag:atlas-proxy>
 # Run again to update the proxy; the key is then not used and may be anything.
 set -euo pipefail
@@ -14,10 +14,10 @@ fi
 tailscale status >/dev/null 2>&1 || tailscale up --login-server https://headscale.plaibook.tech --authkey "$KEY" --hostname atlas-proxy
 mkdir -p /opt/atlas-proxy
 cat > /opt/atlas-proxy/socks.py <<'PY'
-"""SOCKS5, no auth, CONNECT by name to the nonprod Atlas cluster's members only."""
+"""SOCKS5, no auth, CONNECT by name to the store's Atlas cluster's members only (rmplanner)."""
 import asyncio, re, struct, sys
 
-ALLOWED = re.compile(r"^[a-z0-9-]+\.9b4l8\.mongodb\.net$")
+ALLOWED = re.compile(r"^[a-z0-9-]+\.ofldod7\.mongodb\.net$")
 
 
 async def pipe(r, w):
@@ -65,7 +65,7 @@ asyncio.run(main())
 PY
 cat > /etc/systemd/system/atlas-proxy.service <<'UNIT'
 [Unit]
-Description=SOCKS5 to the nonprod Atlas cluster on the tailnet (agentbox docs/org.md)
+Description=SOCKS5 to the org store's Atlas cluster on the tailnet (agentbox docs/org.md)
 After=tailscaled.service
 Wants=tailscaled.service
 

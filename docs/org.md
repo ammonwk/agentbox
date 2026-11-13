@@ -10,8 +10,8 @@ The code is `src/core/org/` (config, seal, store, accounts, skills, and the
 
 ## The model
 
-**The store.** One MongoDB database, `agentbox_plaibook` on the nonprod Atlas
-cluster, reached with a database user (`agentbox-plaibook`) that can touch only
+**The store.** One MongoDB database, `agentbox_plaibook` on production's Atlas
+cluster (`rmplanner`, since 2026-11-06), reached with a database user (`agentbox-plaibook`) that can touch only
 that database. Every member's machine calls out to it, polling; nothing calls
 in. Atlas admits only our AWS network, so the store is reached through a
 SOCKS5 proxy on the team tailnet (below), with the driver's own URI options,
@@ -235,8 +235,9 @@ store goes through its AWS tunnel (127.0.0.1:27180), so its invite is
 the VPC that already holds everyone's Session Manager tunnels and whose NAT
 addresses Atlas admits. `scripts/tailnet/atlas-proxy.sh` installs Tailscale,
 joins it and runs a SOCKS5 server (`atlas-proxy.service`) on its tailnet
-address that connects only to the nonprod cluster's members
-(`*.9b4l8.mongodb.net:27017`). The host is terraform's
+address that connects only to the store's cluster's members
+(`*.ofldod7.mongodb.net:27017`; the store's database user can touch only
+`agentbox_plaibook` there). The host is terraform's
 (`plaibook-platform/infrastructure/ssm-jump-host.tf`) and keeps none of this
 if it is replaced: run the script again over SSM, with a key from
 `ssh headscale sudo headscale preauthkeys create --tags
