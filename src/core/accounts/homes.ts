@@ -88,9 +88,7 @@ const HOMES: Record<AccountProvider, { credentials: string; login?(a: Pick<Accou
     credentials: ".credentials.json",
     login(a) {
       if (!a.email) return null;
-      const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
-      const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
-      return `claude|${a.email.toLowerCase()}|${typeof org === "string" ? org : ""}`;
+      return `claude|${a.email.toLowerCase()}|${orgOf({ ...a, provider: "claude" }) ?? ""}`;
     },
     // `statusline*` is a prefix match: people keep status-line scripts next
     // to settings.json and reference them by path.
@@ -187,6 +185,19 @@ export function placeholderLabel(provider: ProviderId, isDefault: boolean): stri
 
 export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
   return !a.label || a.label === placeholderLabel(a.provider, true) || a.label === placeholderLabel(a.provider, false);
+}
+
+/**
+ * The organization a Claude home is logged in to; null for other providers
+ * or a home that names none. A Claude conversation's thinking is tied to the
+ * org it was written in: resumed on another org's login, every earlier
+ * turn's thinking is dropped and has to be thought again.
+ */
+export function orgOf(a: Pick<Account, "provider" | "home">): string | null {
+  if (a.provider !== "claude") return null;
+  const path = claudeJsonPath({ home: a.home, isDefault: samePath(a.home, defaultHome("claude")) });
+  const org = (readJsonObject(path)?.oauthAccount as Record<string, unknown> | undefined)?.organizationUuid;
+  return typeof org === "string" && org ? org : null;
 }
 
 /**

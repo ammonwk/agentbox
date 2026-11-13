@@ -22,7 +22,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { owners, sameLogin } from "./accounts/homes";
+import { orgOf, owners, sameLogin } from "./accounts/homes";
 import { accountServes, serviceOf, serviceOfModel, SERVICES } from "./accounts/services";
 import { elsewhere, place, type AccountState } from "./balancer";
 import { claimFor, listedClaim } from "./claim";
@@ -873,11 +873,12 @@ export class Fleet extends EventEmitter {
   }
 
   /** Where a session stopped at its account's limit can go: the balancer's
-   *  first choice among the other accounts that can take a session. */
+   *  first choice among the other accounts that can take a session, in its
+   *  organization while one there can (`movePlacement`). */
   private hopTarget(rec: SessionRecord, v: Session): Candidate | null {
     if (!this.movable.has(rec.provider) || !rec.agentSessionId) return null;
     const own = this.ownerOf(rec.accountId ?? "");
-    return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false, rec.scope), own);
+    return elsewhere(this.movePlacement(rec, v, own), own);
   }
 
   private hop(v: Session, to: Candidate, now: number): void {
@@ -3314,17 +3315,40 @@ export class Fleet extends EventEmitter {
 
   /**
    * Where a cold session should wake: the balancer's pick for a session like
-   * it, when that is another account. Null means stay — the pick is where it
+   * it (`movePlacement`), or the account named, when that is another account. Null means stay — the pick is where it
    * already is, or nothing can take it and a pinned session beats none.
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false, rec.scope);
+    const placement = accountId ? this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false, rec.scope) : this.movePlacement(rec, view);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
     const account = getAccount(placement.accountId);
     return account ? { account, placement } : null;
+  }
+
+  /**
+   * The balancer's pick for moving a session, held to the organization its
+   * account is in while an account there can take it: on another org's login
+   * it loses the thinking of every turn before (`orgOf`). Only an org of
+   * several logins (a team plan) holds it; one of a single login would pin
+   * the session where it is, and spreading personal plans' weeklies is worth
+   * more than its thinking. `leaving` is the login it cannot stay on.
+   */
+  private movePlacement(rec: SessionRecord, view: Session, leaving?: string): Placement {
+    const p = this.placement(rec.provider, view.model, null, rec.effort ?? null, false, rec.scope);
+    const own = rec.accountId ? getAccount(rec.accountId) : null;
+    const org = own ? orgOf(own) : null;
+    if (!org) return p;
+    const mates = p.candidates.filter((c) => {
+      const a = getAccount(c.accountId);
+      return a ? orgOf(a) === org : false;
+    });
+    if (new Set(mates.map((c) => this.ownerOf(c.accountId))).size < 2) return p;
+    const pick = mates.find((c) => c.eligible && c.accountId !== leaving);
+    if (!pick) return p;
+    return { ...p, candidates: mates, accountId: pick.accountId, mode: "auto", why: `${pick.label}, the balancer's first pick in the organization its thinking was written in` };
   }
 
   /**
