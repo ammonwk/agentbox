@@ -41,7 +41,7 @@ import { unfinishedClaims } from "./prclaims";
 import { describeRule, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import { listScheduledSessions, markScheduled } from "./schedule-sessions";
 import { turnStatus } from "./turnstatus";
-import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
+import type { ProviderId, Schedule, ScheduleSpec, Scope, Session } from "./types";
 import { ensureCheckout } from "./worktrees";
 
 const TICK_MS = 15_000;
@@ -94,6 +94,8 @@ export interface ScheduleEdit {
   noteCmd?: string | null;
   /** [] takes them away. */
   fallbacks?: ProviderId[];
+  /** Where the sessions it starts from now on are: yours or the org's. */
+  scope?: Scope;
 }
 
 /** What a new schedule may say beyond when and what. */
@@ -171,6 +173,7 @@ export class Scheduler {
       spec = { ...spec, fallbacks: edit.fallbacks.length ? edit.fallbacks : undefined };
       checkSpec(spec);
     }
+    if (edit.scope !== undefined) spec = { ...spec, scope: edit.scope };
     if (spec !== s.spec) patch.spec = spec;
     if (edit.when !== undefined) patch.rule = await settle(parse(edit.when, now), spec);
     if (edit.label !== undefined) patch.label = edit.label?.trim() || null;

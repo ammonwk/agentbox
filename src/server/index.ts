@@ -1442,6 +1442,7 @@ const router = new Router(mapError)
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
     if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
     if (b.fallbacks !== undefined) edit.fallbacks = providers(b.fallbacks);
+    edit.scope = scopeOf(b);
     return json(await scheduler.update(params.id!, edit));
   })
   .add("DELETE", "/api/schedules/:id", ({ params }) => {

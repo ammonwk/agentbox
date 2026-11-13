@@ -15,8 +15,9 @@ agentbox org init <name> --store <mongodb uri> [--skills owner/repo]
                                              start an org (its store's database in the URI's path); prints its invite
 agentbox org join <invite>                   join the org an invite is for
 agentbox org default org|personal            where a session starts when it does not say (--org, --personal) and has no parent
-agentbox org scope org|personal <session>...
-                                             move sessions into the org (seen and messaged by its members) or out of it
+agentbox org scope org|personal <session or schedule>...
+                                             move sessions into the org (seen and messaged by its members) or out of it;
+                                             a schedule's: the sessions it starts from now on
 agentbox org env [NAME=value | NAME=]...     the variables every session gets (shown by name); set or remove some
 agentbox org invite                          the invite for the next member: it is the org's store and key, send it privately
 agentbox org share <account>                 put an account's login in the org's pool; it stays yours
@@ -85,7 +86,10 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       let failed = 0;
       for (const id of ids) {
         try {
-          await api("PATCH", `/api/sessions/${encodeURIComponent(id)}`, { scope });
+          // A session, or else a schedule: the sessions it starts from now on.
+          const state = await api<AppState>("GET", "/api/state");
+          const path = state.schedules.some((sc) => sc.id === id) ? "schedules" : "sessions";
+          await api("PATCH", `/api/${path}/${encodeURIComponent(id)}`, { scope });
           console.log(`${id}: ${scope}`);
         } catch (e) {
           failed++;

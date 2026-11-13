@@ -84,6 +84,8 @@ export type Start = {
   fallbacks?: string[];
   /** Puts it under that session on the board. */
   parent?: string;
+  /** Your accounts and seen by you alone, or the org's pool and seen by its members (docs/org.md). Default: its parent's, else yours. */
+  scope?: "personal" | "org";
   /** A pull request it has from its first moment. */
   claim?: string;
   /** Reads, never writes (codex): for a reviewer. */

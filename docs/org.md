@@ -57,7 +57,10 @@ schedule keeps the scope it was made with, or takes the default when it
 starts. A session started outside agentbox is personal, unless its home is
 the pool's mirror of someone else's login. `agentbox org scope
 org|personal <session>...` moves a session from one to the other later,
-refused when its account is not one the new scope may run on. Scope decides:
+refused when its account is not one the new scope may run on; given a
+schedule's id, it changes the scope of the sessions the schedule starts from
+then on. An extension's long conversation (`sdk/conversation.ts`) takes
+`scope` in its `start`, so each successor stays where the first was. Scope decides:
 
 - **which accounts it may run on** (`Fleet.scopesOf`): a personal session on
   your own accounts, an org session on the logins in the pool. A login of
