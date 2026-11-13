@@ -1,7 +1,7 @@
 /** The new-session dialog's memory, model ranking and `/skill` completion.
  *  Pure, apart from the two localStorage calls. */
 
-import type { ModelOption, PrInfo, ProviderId, Repo, Session, SkillInfo, SkillSource } from "../../../src/core/types";
+import type { ModelOption, PrInfo, ProviderId, Repo, Scope, Session, SkillInfo, SkillSource } from "../../../src/core/types";
 import type { SavedAttachment } from "../attachments";
 import { prRefs } from "./prlinks";
 
@@ -20,6 +20,8 @@ export interface NewSessionPrefs {
   /** Start a dev server with the session. */
   devServer?: boolean;
   path?: string;
+  /** Personal or the org's, in an org. */
+  scope?: Scope;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
   /** The unsent prompt; cleared when a session starts. */
   draft?: string;
@@ -40,7 +42,7 @@ export function loadPrefs(project: string | null = null): NewSessionPrefs {
     const raw = localStorage.getItem(prefsKey(project));
     if (project && !raw) {
       const global = loadPrefs();
-      return { provider: global.provider, perProvider: global.perProvider, where: "repo", repoId: project };
+      return { provider: global.provider, perProvider: global.perProvider, scope: global.scope, where: "repo", repoId: project };
     }
     const v = JSON.parse(raw ?? "{}") as unknown;
     const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};

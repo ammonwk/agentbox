@@ -193,8 +193,8 @@ export function NewSession({
     el.scrollTop = el.scrollHeight;
   }, [dictated]);
 
-  // In an org, the org's pool or your own accounts; out of one, your own.
-  const [scope, setScope] = useState<Scope>(state.org ? state.settings.scope : "personal");
+  // In an org, the org's pool or your own accounts, as last picked; out of one, your own.
+  const [scope, setScope] = useState<Scope>(state.org ? (prefs.scope ?? state.settings.scope) : "personal");
   const accounts = useMemo(
     () => state.accounts.filter((a) => runsOn(a, provider) && a.scopes.includes(scope)),
     [state.accounts, provider, scope],
@@ -394,8 +394,8 @@ export function NewSession({
   const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider, draft: prompt, draftImages }, project);
-  }, [provider, where, repoId, worktree, wtFromPrompt, devServer, path, perProvider, prompt, draftImagesKey]);
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider, draft: prompt, draftImages }, project);
+  }, [provider, where, repoId, worktree, wtFromPrompt, devServer, path, scope, perProvider, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -475,7 +475,7 @@ export function NewSession({
     try {
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
-        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider }, project);
+        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider }, project);
         onScheduled(sc);
         return;
       }
@@ -483,7 +483,7 @@ export function NewSession({
       if (devTab) devTab.location.href = `/api/sessions/${encodeURIComponent(r.session.id)}/dev/open`;
       noteStarted(r.session);
       if (where === "path") noteFolderChoice(r.session.cwd ?? path.trim());
-      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider }, project);
+      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, scope, perProvider }, project);
       onCreated(r.session.id);
     } catch (e) {
       devTab?.close();
