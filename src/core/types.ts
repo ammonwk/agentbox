@@ -175,6 +175,9 @@ export interface AccountView extends Account {
   /** The service it is a login to (`SERVICES`, providers/account.ts); null
    *  for a CLI's own login. */
   service: ServiceId | null;
+  /** Points each daily-or-longer window used over its last full length,
+   *  by window id (`burnOf`): how fast it is really being spent. */
+  burn: Record<string, number>;
   /** Active sessions on this account (in any of its homes) and what they
    *  still claim. */
   claims: ClaimView[];

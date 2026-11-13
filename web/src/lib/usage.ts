@@ -120,3 +120,100 @@ export function noLimitOf(a: Pick<AccountView, "service" | "usage">): string | n
 export function planOf(a: Pick<AccountView, "plan" | "label">): string | null {
   return a.plan && a.plan !== a.label ? a.plan : null;
 }
+
+/**
+ * A provider's accounts taken as one tank, against when its windows reset:
+ * spending as fast as it has over the last window's length, does it run dry
+ * before refills come ("stop"), leave limits to reset unspent ("under", by
+ * how much faster it would have to go), or neither ("on")? `perWindow` is
+ * that pace in whole accounts a window, of the `accounts` it was judged on.
+ * Null with nothing spent to judge by.
+ */
+export type ProviderPace = TankPace & { window: string };
+
+/**
+ * Each account's main window of one kind (weekly, monthly…) is a share of the
+ * tank; the pace is what they all used over the last length of it (`burn`).
+ * Spending goes to the window that resets first, as the balancer would, so
+ * the forecast is the best case: a stop it predicts is one no placement
+ * avoids, and the pace it asks for is the least that spends every window
+ * before it resets. The kind that binds first is the answer.
+ */
+export function providerPace(accounts: readonly AccountView[], now: number): ProviderPace | null {
+  const live = accounts.filter((a) => a.enabled && a.auth.state !== "expired" && a.auth.state !== "missing" && !a.usage.refusedAt);
+  const paces = (["daily", "weekly", "monthly"] as const).flatMap((kind) => {
+    const ws = live.flatMap((a) => a.usage.windows.filter((w) => w.kind === kind && !w.scope && w.windowMs > 0).map((w) => ({ w, burn: a.burn[w.id] ?? 0 })));
+    const p = ws.length ? tankPace(ws, now) : null;
+    return p ? [{ ...p, window: KIND_LABEL[kind].toLowerCase() }] : [];
+  });
+  const stops = paces.filter((p) => p.kind === "stop");
+  if (stops.length) return stops.reduce((a, b) => (b.inMs < a.inMs ? b : a));
+  // How much faster you can go is capped by the kind nearest its limit.
+  const on = paces.find((p) => p.kind === "on");
+  if (on) return on;
+  return paces.reduce<ProviderPace | null>((a, b) => (!a || (a.kind === "under" && b.kind === "under" && b.pct < a.pct) ? b : a), null);
+}
+
+type TankPace = { perWindow: number; accounts: number } & (
+  | { kind: "stop"; inMs: number }
+  | { kind: "under"; pct: number }
+  | { kind: "on" }
+);
+
+function tankPace(ws: readonly { w: UsageWindow; burn: number }[], now: number): TankPace | null {
+  const W = ws[0]!.w.windowMs;
+  const spent = ws.reduce((n, x) => n + x.burn, 0);
+  if (spent <= 0) return null;
+  const rate = spent / W; // points per ms, the whole pool's
+  const at = { perWindow: spent / 100, accounts: ws.length };
+  // Where each window stands now; one past its reset has started over empty.
+  const tank = ws.map(({ w }) => {
+    let reset = w.resetsAt ?? now + W;
+    const left = reset <= now ? 100 : 100 - clamp(w.usedPct, 0, 100);
+    while (reset <= now) reset += W;
+    return { left, reset: reset - now };
+  });
+
+  // When the pool runs dry, spending first what resets first. A quarter of
+  // windows out is far enough for a pace a little over what refills to show.
+  const sim = tank.map((t) => ({ ...t }));
+  for (let t = 0; t < 13 * W; ) {
+    const next = Math.min(...sim.map((s) => s.reset));
+    const avail = sim.reduce((n, s) => n + s.left, 0);
+    if (rate * (next - t) >= avail) return { kind: "stop", inMs: t + avail / rate, ...at };
+    let budget = rate * (next - t);
+    for (const s of [...sim].sort((a, b) => a.reset - b.reset)) {
+      const d = Math.min(s.left, budget);
+      s.left -= d;
+      budget -= d;
+    }
+    for (const s of sim) if (s.reset === next) Object.assign(s, { left: 100, reset: next + W });
+    t = next;
+  }
+
+  // The least pace that spends every window before it resets: what resets
+  // by each reset, soonest first, has to be spent by then.
+  let needed = 0;
+  let sum = 0;
+  for (const t of [...tank].sort((a, b) => a.reset - b.reset)) {
+    sum += t.left;
+    needed = Math.max(needed, sum / t.reset);
+  }
+  return needed > rate ? { kind: "under", pct: (needed / rate - 1) * 100, ...at } : { kind: "on", ...at };
+}
+
+/** "dead stop in 1d 2h", "increase pace by 60%", "on pace". */
+export function paceText(p: ProviderPace): string {
+  if (p.kind === "stop") return `dead stop in ${fmtCountdown(p.inMs)}`;
+  if (p.kind === "under") return `increase pace by ${p.pct >= 10 ? Math.round(p.pct) : fmtPts(p.pct)}%`;
+  return "on pace";
+}
+
+/** The why under it: the pace it was judged at, against what there is. */
+export function paceWhy(p: ProviderPace): string {
+  const per = p.window === "daily" ? "day" : p.window.replace(/ly$/, "");
+  const at = `Spending ${fmtPts(p.perWindow)} of ${p.accounts} ${p.window} limit${p.accounts === 1 ? "" : "s"} a ${per}, by the last ${per}'s use.`;
+  if (p.kind === "stop") return `${at} Even placed on whichever resets first, every one is spent in ${fmtCountdown(p.inMs)}.`;
+  if (p.kind === "under") return `${at} At that pace some ${p.window} limits reset with use left; ${fmtPts(p.pct)}% faster spends them all.`;
+  return `${at} Every ${p.window} limit is spent by its reset, and none runs dry before refills come.`;
+}

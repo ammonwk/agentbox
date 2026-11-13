@@ -27,6 +27,22 @@
 .acs-sec-head .faint {
   font-size: 12px;
 }
+.acs-pace {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  cursor: help;
+}
+.acs-pace[data-tone="bad"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.acs-pace[data-tone="warn"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
 .acs-sec-actions {
   display: flex;
   align-items: center;

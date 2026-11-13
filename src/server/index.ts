@@ -90,6 +90,7 @@ import { adapters } from "../core/providers";
 import { sendAsAgent } from "../core/sendguard";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
+import { burnOf } from "../core/accounts/usage";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
@@ -394,6 +395,7 @@ function buildAccountViews(): AccountView[] {
       claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
       placement: candidates.get(`${a.id}/${scopes[0] ?? "personal"}`) ?? null,
       alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
+      burn: burnOf(a.id, a.usage.windows, Date.now()),
     };
   });
 }

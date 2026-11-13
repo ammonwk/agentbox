@@ -27,7 +27,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
-import { creditSamplesSince, getKv, insertCreditSample, insertUsageSample, lastUsageSample, setKv, type CreditSample, type UsageSampleRow } from "../db";
+import { creditSamplesSince, getKv, insertCreditSample, insertUsageSample, lastUsageSample, setKv, usageSamplesSince, type CreditSample, type UsageSampleRow } from "../db";
 import type { Account, AccountProvider, AccountUsage, CreditBalance, CreditReading, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
@@ -825,6 +825,37 @@ function shouldSample(last: UsageSampleRow | null, w: UsageWindow, at: number): 
   if ((last.resetsAt === null) !== (w.resetsAt === null)) return true;
   if (last.resetsAt !== null && w.resetsAt !== null && Math.abs(last.resetsAt - w.resetsAt) > MIN) return true;
   return at - last.at >= SAMPLE_EVERY_MS;
+}
+
+/** How often an account's burn is worked out again: it moves by the hour. */
+const BURN_EVERY_MS = 10 * MIN;
+const burns = new Map<string, { at: number; burn: Record<string, number> }>();
+
+/**
+ * Points each of an account's daily-or-longer windows used over the last
+ * length of that window, from its readings: every rise, and the whole of a
+ * reading that started a new window. Measured rather than read off the
+ * current windows, which forget what was spent in one that has since reset.
+ */
+export function burnOf(accountId: string, windows: readonly UsageWindow[], now: number): Record<string, number> {
+  const cached = burns.get(accountId);
+  if (cached && now - cached.at < BURN_EVERY_MS) return cached.burn;
+  const long = windows.filter((w) => w.kind !== "short" && w.windowMs > 0);
+  const span = Math.max(0, ...long.map((w) => w.windowMs));
+  const rows = span ? usageSamplesSince(now - span, accountId) : [];
+  const burn: Record<string, number> = {};
+  for (const w of long) {
+    const seq = rows.filter((r) => r.windowId === w.id && r.at >= now - w.windowMs);
+    let used = 0;
+    for (let i = 1; i < seq.length; i++) {
+      const [x, y] = [seq[i - 1]!, seq[i]!];
+      const fresh = y.usedPct < x.usedPct - 1 || (x.resetsAt !== null && y.resetsAt !== null && y.resetsAt - x.resetsAt > w.windowMs / 2);
+      used += fresh ? y.usedPct : Math.max(0, y.usedPct - x.usedPct);
+    }
+    burn[w.id] = used;
+  }
+  burns.set(accountId, { at: now, burn });
+  return burn;
 }
 
 /** A rise bigger than this is credits bought; a smaller one is two sessions

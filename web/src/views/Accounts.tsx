@@ -5,7 +5,7 @@ import { accountProvider, ORG_PROVIDERS, service, SERVICES } from "../../../src/
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
-import { noLimitOf, outstandingOf, planOf, shortForecastHow, sortWindows } from "../lib/usage";
+import { noLimitOf, outstandingOf, paceText, paceWhy, planOf, providerPace, shortForecastHow, sortWindows } from "../lib/usage";
 import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
 import { Insights } from "./Insights";
@@ -104,6 +104,7 @@ function AccountList({ state }: { state: AppState }) {
   );
 
   const dismiss = (id: string) => setDismissed((d) => new Set(d).add(id));
+  const now = useNow(60_000);
 
   return (
     <div className="acs">
@@ -131,6 +132,7 @@ function AccountList({ state }: { state: AppState }) {
           (l) => l.provider === p && l.state !== "done" && !accounts.some((a) => a.id === l.accountId),
         );
         const info = state.providers.find((x) => x.id === p);
+        const pace = providerPace(accounts, now);
         return (
           <section key={p} className="acs-sec" aria-labelledby={`acs-${p}`}>
             <header className="acs-sec-head">
@@ -140,6 +142,12 @@ function AccountList({ state }: { state: AppState }) {
                 {accounts.length} account{accounts.length === 1 ? "" : "s"}
                 {info?.version ? ` · ${info.version}` : info && !info.installed ? " · CLI not installed" : ""}
               </span>
+              {pace ? (
+                <span className="acs-pace" data-tone={pace.kind === "stop" && pace.inMs < 7 * 86_400_000 ? "bad" : pace.kind === "on" ? "ok" : "warn"} title={paceWhy(pace)}>
+                  {paceText(pace)}
+                  {pace.window !== "weekly" ? <span className="faint"> · {pace.window}</span> : null}
+                </span>
+              ) : null}
               <span className="acs-sec-actions">
                 {p === "omp" ? (
                   <>
