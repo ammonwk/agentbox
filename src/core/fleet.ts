@@ -2336,7 +2336,7 @@ export class Fleet extends EventEmitter {
 
   /**
    * For a session nothing of which runs, what else its view is drawn from —
-   * whether its cache has gone cold, whether its parent runs, its pool agent,
+   * whether its cache has gone cold, whether its parent is open, its pool agent,
    * its account's owner — so a pass can tell the view it has is still right.
    * Null while a process or pane of it is there: then it is drawn anew.
    */
@@ -2345,10 +2345,10 @@ export class Fleet extends EventEmitter {
     if (rec.agentSessionId && this.live.has(`${rec.provider}:${rec.agentSessionId}`)) return null;
     const f = t?.facts ?? (rec.facts as Partial<TranscriptFacts> | null);
     const cold = this.movable.has(rec.provider) && now > cacheWarmUntil(f, rec.lastActivityAt, this.coldAfterMs);
-    const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
+    const parentOpen = !!rec.parent && this.openIds.has(rec.parent);
     // A limit it stopped at ends when its account's usage says so, not when the view was drawn.
     const hit = f ? limitStop({ ...f, lastActivityAt: f.lastActivityAt ?? rec.lastActivityAt }) : null;
-    return `${cold}|${parentRuns}|${this.holding.has(rec.id)}|${JSON.stringify(this.waitsOf.get(rec.id) ?? [])}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
+    return `${cold}|${parentOpen}|${this.holding.has(rec.id)}|${JSON.stringify(this.waitsOf.get(rec.id) ?? [])}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
   }
 
   private viewOf(rec: SessionRecord, now: number): Session | null {
@@ -2476,12 +2476,11 @@ export class Fleet extends EventEmitter {
     const live = status;
     this.liveStatus.set(rec.id, live);
     if (rec.archivedAt) status = "closed";
-    // A stopped child was a call in its parent's run — a pool agent, a
-    // teammate, a `codex exec` from a Bash tool: listed while that run goes
-    // on, then history (resumable by id), never stranded at the root of the
-    // board or piled under a caller that has stopped. One with a wait armed, a
-    // claim on an open PR or a decision open is parked work, not a finished call.
-    else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
+    // A stopped child goes with its parent: listed under it while the parent
+    // is on the board, stopped or not (the board folds the inactive ones), and
+    // closed once the parent is, never stranded at the root. One with a wait
+    // armed, a claim on an open PR or a decision open is work, and stays.
+    else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !this.openIds.has(rec.parent)) {
       status = "closed";
     }
     // So is a scripted one-shot (`claude -p`) once it ends: what ran it took

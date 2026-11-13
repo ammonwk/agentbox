@@ -321,12 +321,13 @@ export class Scheduler {
   }
 
   /**
-   * Close finished sessions once their last message is an hour old: the ones
-   * a schedule started and no longer speaks to, and the ones another session
-   * started (`finished`), unless one has a session of its own still open, a
-   * decision still with you (its answer comes back to it), or you pinned or
-   * bookmarked it. A wait for your answer is not the red schedule's: it does
-   * not hold a new streak back, so `finished` itself does not count it.
+   * Close the sessions a schedule started and no longer speaks to once they
+   * are finished and their last message is an hour old, unless one has a
+   * session of its own still open, a decision still with you (its answer
+   * comes back to it), or you pinned or bookmarked it. A wait for your answer
+   * is not the red schedule's: it does not hold a new streak back, so
+   * `finished` itself does not count it. Sessions another started stay: the
+   * board folds the finished ones under their parent.
    */
   private async closeFinished(now: number): Promise<void> {
     const sessions = this.fleet.sessions();
@@ -337,7 +338,7 @@ export class Scheduler {
     let closed = false;
     for (const s of sessions) {
       if (!open.has(s.id) || parents.has(s.id)) continue;
-      if (!scheduled.has(s.id) && !s.parent) continue;
+      if (!scheduled.has(s.id)) continue;
       // You pinned or bookmarked it: it is not clutter to you.
       if (s.pinOrder !== null || s.bookmarkedAt !== null) continue;
       if (now - s.lastActivityAt < CLOSE_FINISHED_MS) continue;
