@@ -1373,7 +1373,7 @@ const router = new Router(mapError)
   // An org session on another member's machine: its conversation, as that machine answers.
   .add("GET", "/api/org/sessions/:id/conversation", async ({ params }) => {
     const row = await org.find(params.id!);
-    if (!row) throw new HttpError(404, `no org session ${params.id} on another member's machine`);
+    if (!row) throw new HttpError(404, `${params.id} is no longer in the org: its machine closed it, or made it personal`);
     try {
       return json({ session: row._id, person: row.person, machine: row.machine, title: row.title, events: await org.read(row) });
     } catch (e) {
