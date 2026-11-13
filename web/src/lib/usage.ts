@@ -5,6 +5,8 @@ import type { AccountUsage, AccountView, ClaimView, UsageWindow } from "../../..
 import { service } from "../../../src/core/providers/account";
 import { clamp, fmtCountdown, fmtPts } from "./format";
 
+const WEEK = 7 * 86_400_000;
+
 export type Tone = "ok" | "warn" | "bad";
 
 /** Amber is "worth knowing", red is "this is why the next session will not fit". */
@@ -123,17 +125,17 @@ export function planOf(a: Pick<AccountView, "plan" | "label">): string | null {
 
 /**
  * A provider's accounts taken as one tank, against when its windows reset:
- * spending as fast as it has over the last window's length, does it run dry
- * before refills come ("stop"), leave limits to reset unspent ("under", by
- * how much faster it would have to go), or neither ("on")? `perWindow` is
- * that pace in whole accounts a window, of the `accounts` it was judged on.
+ * if the last week's use carried on, does it run dry before refills come
+ * ("stop"), leave limits to reset unspent ("under", by how much faster it
+ * would have to go), or neither ("on")? `perWeek` is that pace in whole
+ * limits a week, of the `accounts` it was judged on.
  * Null with nothing spent to judge by.
  */
 export type ProviderPace = TankPace & { window: string };
 
 /**
  * Each account's main window of one kind (weekly, monthly…) is a share of the
- * tank; the pace is what they all used over the last length of it (`burn`).
+ * tank; the pace is what they all used in the last week (`burn`).
  * Spending goes to the window that resets first, as the balancer would, so
  * the forecast is the best case: a stop it predicts is one no placement
  * avoids, and the pace it asks for is the least that spends every window
@@ -154,7 +156,7 @@ export function providerPace(accounts: readonly AccountView[], now: number): Pro
   return paces.reduce<ProviderPace | null>((a, b) => (!a || (a.kind === "under" && b.kind === "under" && b.pct < a.pct) ? b : a), null);
 }
 
-type TankPace = { perWindow: number; accounts: number } & (
+type TankPace = { perWeek: number; accounts: number } & (
   | { kind: "stop"; inMs: number }
   | { kind: "under"; pct: number }
   | { kind: "on" }
@@ -164,8 +166,8 @@ function tankPace(ws: readonly { w: UsageWindow; burn: number }[], now: number):
   const W = ws[0]!.w.windowMs;
   const spent = ws.reduce((n, x) => n + x.burn, 0);
   if (spent <= 0) return null;
-  const rate = spent / W; // points per ms, the whole pool's
-  const at = { perWindow: spent / 100, accounts: ws.length };
+  const rate = spent / WEEK; // points per ms, the whole pool's
+  const at = { perWeek: spent / 100, accounts: ws.length };
   // Where each window stands now; one past its reset has started over empty.
   const tank = ws.map(({ w }) => {
     let reset = w.resetsAt ?? now + W;
@@ -174,10 +176,10 @@ function tankPace(ws: readonly { w: UsageWindow; burn: number }[], now: number):
     return { left, reset: reset - now };
   });
 
-  // When the pool runs dry, spending first what resets first. A quarter of
-  // windows out is far enough for a pace a little over what refills to show.
+  // When the pool runs dry, spending first what resets first. A quarter out
+  // is far enough for a pace a little over what refills to show.
   const sim = tank.map((t) => ({ ...t }));
-  for (let t = 0; t < 13 * W; ) {
+  for (let t = 0; t < 13 * WEEK; ) {
     const next = Math.min(...sim.map((s) => s.reset));
     const avail = sim.reduce((n, s) => n + s.left, 0);
     if (rate * (next - t) >= avail) return { kind: "stop", inMs: t + avail / rate, ...at };
@@ -211,9 +213,8 @@ export function paceText(p: ProviderPace): string {
 
 /** The why under it: the pace it was judged at, against what there is. */
 export function paceWhy(p: ProviderPace): string {
-  const per = p.window === "daily" ? "day" : p.window.replace(/ly$/, "");
-  const at = `Spending ${fmtPts(p.perWindow)} of ${p.accounts} ${p.window} limit${p.accounts === 1 ? "" : "s"} a ${per}, by the last ${per}'s use.`;
-  if (p.kind === "stop") return `${at} Even placed on whichever resets first, every one is spent in ${fmtCountdown(p.inMs)}.`;
+  const at = `The last week used ${fmtPts(p.perWeek)} of ${p.accounts} ${p.window} limit${p.accounts === 1 ? "" : "s"}.`;
+  if (p.kind === "stop") return `${at} If that carries on, even placed on whichever resets first, every one is spent in ${fmtCountdown(p.inMs)}.`;
   if (p.kind === "under") return `${at} At that pace some ${p.window} limits reset with use left; ${fmtPts(p.pct)}% faster spends them all.`;
   return `${at} Every ${p.window} limit is spent by its reset, and none runs dry before refills come.`;
 }

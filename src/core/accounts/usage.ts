@@ -832,20 +832,20 @@ const BURN_EVERY_MS = 10 * MIN;
 const burns = new Map<string, { at: number; burn: Record<string, number> }>();
 
 /**
- * Points each of an account's daily-or-longer windows used over the last
- * length of that window, from its readings: every rise, and the whole of a
- * reading that started a new window. Measured rather than read off the
+ * Points each of an account's daily-or-longer windows used in the last week,
+ * from its readings: every rise, and the whole of a reading that started a
+ * new window. A week for a monthly window too: a month's average is too slow
+ * to show a change in how you work. Measured rather than read off the
  * current windows, which forget what was spent in one that has since reset.
  */
 export function burnOf(accountId: string, windows: readonly UsageWindow[], now: number): Record<string, number> {
   const cached = burns.get(accountId);
   if (cached && now - cached.at < BURN_EVERY_MS) return cached.burn;
   const long = windows.filter((w) => w.kind !== "short" && w.windowMs > 0);
-  const span = Math.max(0, ...long.map((w) => w.windowMs));
-  const rows = span ? usageSamplesSince(now - span, accountId) : [];
+  const rows = long.length ? usageSamplesSince(now - WEEK, accountId) : [];
   const burn: Record<string, number> = {};
   for (const w of long) {
-    const seq = rows.filter((r) => r.windowId === w.id && r.at >= now - w.windowMs);
+    const seq = rows.filter((r) => r.windowId === w.id);
     let used = 0;
     for (let i = 1; i < seq.length; i++) {
       const [x, y] = [seq[i - 1]!, seq[i]!];
