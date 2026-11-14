@@ -374,9 +374,17 @@ const FATAL_ERROR_TEXT =
  *  minutes and came back with the same token; a new login was never needed. */
 const GRANT_ERROR_TEXT = /requires an access grant/i;
 
+/** "Login expired · Please run /login" mid-turn, on a login the org store
+ *  keeps: its refresh revokes the access token every running CLI holds, and
+ *  each one mid-turn stops here seconds later (every session on ammon3 at
+ *  once, 2026-11-14). The home already has the new token, so the next try
+ *  goes through. A login that really ended stops again, and the nudges give
+ *  up after a few. */
+const ROTATED_LOGIN_TEXT = /^Login expired\b/i;
+
 function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
   if (OUTPUT_CAP_TEXT.test(text)) return "output-cap";
-  if (GRANT_ERROR_TEXT.test(text)) return "transient";
+  if (GRANT_ERROR_TEXT.test(text) || ROTATED_LOGIN_TEXT.test(text)) return "transient";
   if (FATAL_ERROR_TEXT.test(text)) return "fatal";
   return "transient";
 }
