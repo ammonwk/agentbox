@@ -16,6 +16,7 @@
  *  which is why the store keeps the only one until the sharer takes it back
  *  (`reclaimFromOrg`). */
 
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { deleteAccount, getAccount, insertAccount, listAccounts } from "../db";
@@ -23,9 +24,9 @@ import { claudeJsonPath, credentialsPath, resyncShared } from "../accounts/homes
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
-import type { Account, AccountProvider } from "../types";
+import type { Account, AccountProvider, ServiceId } from "../types";
 import { ORG_PROVIDERS } from "../providers/account";
-import { serviceOf } from "../accounts/services";
+import { API_KEY_FILE, readApiKey, writeApiKey } from "../accounts/services";
 import { isOrgHome, machineName, orgAccountsRoot, personName, readOrg } from "./config";
 import { seal, unseal } from "./seal";
 import { storeAccounts, type StoreAccount } from "./store";
@@ -33,12 +34,15 @@ import { storeAccounts, type StoreAccount } from "./store";
 export const isOrgAccount = (a: Pick<Account, "home">): boolean => isOrgHome(a.home);
 
 /** A login as the store keeps it: claude's credentials and account, codex's
- *  auth.json, an omp account's OpenCode Go Console sign-in, or a devin/muse
- *  credential file whose token does not rotate (`text`). */
+ *  auth.json, an omp account's OpenCode Go Console sign-in or a service's key
+ *  (Morph's), or a devin/muse credential file whose token does not rotate
+ *  (`text`). */
 type ClaudeLogin = { claudeAiOauth: Record<string, unknown>; oauthAccount: Record<string, unknown> | null };
 type CodexLogin = { tokens: Record<string, unknown>; last_refresh?: string } & Record<string, unknown>;
 type StaticLogin = { text: string };
-type Login = ClaudeLogin | CodexLogin | GoLogin | StaticLogin;
+type KeyLogin = { service: ServiceId; key: string };
+type Login = ClaudeLogin | CodexLogin | GoLogin | StaticLogin | KeyLogin;
+const isKey = (l: Login): l is KeyLogin => "key" in l;
 
 export class OrgAccountError extends Error {
   constructor(
@@ -90,6 +94,14 @@ function writeJson(path: string, value: unknown): void {
 /** The file a home keeps its login in. */
 const fileOf = (a: Pick<Account, "provider" | "home">): string => credentialsPath(a.provider, a.home);
 
+/** Take whatever login a home holds out of it: an omp home's may be a key. */
+function clearLogin(a: Pick<Account, "provider" | "home">): boolean {
+  const paths = a.provider === "omp" ? [fileOf(a), join(a.home, API_KEY_FILE)] : [fileOf(a)];
+  const held = paths.filter((p) => existsSync(p));
+  for (const p of held) rmSync(p, { force: true });
+  return held.length > 0;
+}
+
 /** How one provider's login is read, refreshed and written, the same for
  *  every home of it. */
 interface Kind<L extends Login = Login> {
@@ -104,7 +116,7 @@ interface Kind<L extends Login = Login> {
   write(a: Account, l: L): void;
   /** Refreshed `ahead` ms before it runs out, and at least `every` ms; a
    *  login without it does not rotate and is never refreshed. */
-  refresh?: { ahead: number; every?: number; run(l: L, now: number): Promise<{ login: L } | { refused: string } | { retry: string }> };
+  refresh?: { ahead: number; every?: number; rotates?(l: L): boolean; run(l: L, now: number): Promise<{ login: L } | { refused: string } | { retry: string }> };
   /** The login's own id, where the email does not name it. */
   id?(home: string): string | null;
   /** Why a home whose login `read` does not take cannot be shared. */
@@ -202,21 +214,32 @@ const KINDS: Record<AccountProvider, Kind> = {
       },
     },
   },
+  // An OpenCode Go sign-in, or a service's key (Morph's), which does not
+  // rotate and is kept whole, like devin's.
   omp: {
     read(a) {
+      const key = readApiKey(a.home);
+      if (key) return key;
       const login = readGoLogin(a.home);
       return login && login.refresh !== POOLED ? login : null;
     },
-    expiry: (l: GoLogin) => l.expires,
-    pooled: (l: GoLogin) => ({ ...l, refresh: POOLED }),
-    write(a, l: GoLogin) {
+    expiry: (l: GoLogin | KeyLogin) => (isKey(l) ? NaN : l.expires),
+    pooled: (l: GoLogin | KeyLogin) => (isKey(l) ? l : { ...l, refresh: POOLED }),
+    write(a, l: GoLogin | KeyLogin) {
+      if (isKey(l)) {
+        if (!same(readApiKey(a.home), l)) writeApiKey(a.home, l.service, l.key);
+        return;
+      }
       const cur = readGoLogin(a.home);
       // Only what the store moves on: rewriting a file per pass would be churn.
       if (!cur || cur.refresh !== l.refresh || cur.access !== l.access || cur.expires !== l.expires || cur.orgID !== l.orgID) writeGoLogin(a.home, l);
     },
-    refresh: { ahead: REFRESH_AHEAD_MS, run: (l: GoLogin, now) => exchangeGoRefresh(l, fetch, now) },
-    // An email can hold several OpenCode accounts, each its own sign-in.
+    refresh: { ahead: REFRESH_AHEAD_MS, rotates: (l) => !isKey(l), run: (l: GoLogin, now) => exchangeGoRefresh(l, fetch, now) },
+    // An email can hold several OpenCode accounts, each its own sign-in; a
+    // key is named by its service and a digest of it.
     id(home) {
+      const key = readApiKey(home);
+      if (key) return `${key.service}:${createHash("sha256").update(key.key).digest("hex").slice(0, 16)}`;
       const l = readGoLogin(home);
       return l?.accountID ? `${l.accountID}:${l.orgID ?? ""}` : null;
     },
@@ -233,7 +256,7 @@ const KINDS: Record<AccountProvider, Kind> = {
 /** Whether the store should refresh a login now. */
 function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date | null, now: number): boolean {
   const { refresh, expiry } = KINDS[provider];
-  if (!refresh) return false;
+  if (!refresh || refresh.rotates?.(login) === false) return false;
   const exp = expiry(login);
   if (!Number.isFinite(exp)) return true;
   return exp - now < refresh.ahead || (!!refresh.every && (!refreshedAt || now - refreshedAt.getTime() > refresh.every));
@@ -325,12 +348,7 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
       changed = true;
     }
     if (!doc.login) {
-      for (const h of homes) {
-        const path = credentialsPath(h.provider, h.home);
-        if (!existsSync(path)) continue;
-        rmSync(path);
-        changed = true;
-      }
+      for (const h of homes) changed = clearLogin(h) || changed;
       continue;
     }
     const login = unseal<Login>(org.key, doc.login);
@@ -342,7 +360,7 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
   for (const a of listAccounts()) {
     if (!isOrgAccount(a) || mirrors.has(a.id)) continue;
     deleteAccount(a.id);
-    rmSync(credentialsPath(a.provider, a.home), { force: true });
+    clearLogin(a);
     changed = true;
   }
   return changed;
@@ -411,8 +429,6 @@ export async function shareWithOrg(accountId: string): Promise<void> {
   if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
   if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s mirror of someone else's login`);
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
-  // The store keeps and refreshes sign-ins; a key is not one it mirrors.
-  if (serviceOf(a)?.login === "api-key") throw new OrgAccountError(400, `${a.label} runs on a key, which stays on its machine (docs/org.md)`);
   const col = await storeAccounts();
   if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
   const kept = await keptAs(a);

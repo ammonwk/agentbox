@@ -72,9 +72,10 @@ then on. An extension's long conversation (`sdk/conversation.ts`) takes
 
 ## Org accounts
 
-Claude, Codex, omp's OpenCode Go sign-ins, devin and muse. The last two share
-only a credential that does not rotate: devin's `windsurf_api_key` and a muse
-`api_key`. A muse login kept as an access token (or in the macOS Keychain)
+Claude, Codex, omp (an OpenCode Go sign-in or a service's key, Morph's), devin
+and muse. A key does not rotate, so the store keeps it whole and never
+refreshes it, like devin's `windsurf_api_key` and a muse `api_key`, which are
+the only credentials those two share. A muse login kept as an access token (or in the macOS Keychain)
 stays personal, since every sharer refreshing it would log the others out.
 
 A login is shared or not, and you flip it either way at any time
@@ -93,7 +94,7 @@ own home usually), and on each other member's machine, while it is shared,
 the pool's home of it under `org/accounts/<id>`. A machine that holds a
 login of its own of a shared one gets no mirror of it. A login's name across
 machines is its email for claude, codex, devin and muse, and one OpenCode
-account in one workspace for omp — an email can hold several workspaces,
+account in one workspace for an omp sign-in (or the key itself, by digest) — an email can hold several workspaces,
 each its own sign-in.
 
 - **Sharing** seals the login into `accounts` with `shared: true`, or sets
@@ -126,7 +127,8 @@ own, and an ordinary local home for each pooled login it holds none of. It
 writes the store's current login into each: claude `.credentials.json` with
 `refreshToken: "pooled"` and `.claude.json`'s `oauthAccount`, codex `auth.json` with `refresh_token:
 "pooled"`, omp `opencode-console.json` with `refresh: "pooled"`, and devin's
-`devin/credentials.toml` and muse's `muse/auth.json` whole (their key does not
+`devin/credentials.toml`, muse's `muse/auth.json` and an omp key's
+`api-key.json` whole (their key does not
 rotate, so a mirror needs no placeholder). The CLI runs on it as on any
 account, so subscription features, identity, the usage fetchers, limit
 detection and moving a session between accounts work unchanged. The

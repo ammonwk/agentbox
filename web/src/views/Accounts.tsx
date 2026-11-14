@@ -263,8 +263,7 @@ function AccountCard({
   const pooled = !a.scopes.includes("personal");
   const sharer = pooled ? state.org?.accounts.find((x) => x.id === a.id)?.addedBy : undefined;
   const keyed = service(a.service)?.login === "api-key";
-  // A key stays on its machine: the org's store mirrors sign-ins.
-  const sharable = !!org && !pooled && !keyed && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
+  const sharable = !!org && !pooled && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
   const [rekey, setRekey] = useState(false);
   const now = useNow(30_000);
   const claims = a.claims;
