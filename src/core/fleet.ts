@@ -3027,7 +3027,8 @@ export class Fleet extends EventEmitter {
     const fallback = !asked && named && svc && !accountServes(named, provider, adapter.defaultModel?.() ?? null) ? adapter.defaultModelOn?.(svc.id) ?? null : null;
     if (fallback) asked = fallback;
     const runs = asked ?? adapter.defaultModel?.() ?? null;
-    const states = this.accountStates(provider, runs).filter((a) => this.scopesOf(a.account.id).includes(scope));
+    const all = this.accountStates(provider, runs);
+    const states = all.filter((a) => this.scopesOf(a.account.id).includes(scope));
     // Naming another home of a login means the login's account.
     const home = named && states.find((a) => a.account.id === named.id || sameLogin(getAccount(a.account.id)!, named));
     const placed = place({
@@ -3052,6 +3053,12 @@ export class Fleet extends EventEmitter {
       placed.why = svc.harnesses.includes(provider)
         ? `${named.label} is on ${svc.label}, which does not sell ${runs}${sold ? ` (${sold.label} does)` : ""}`
         : `${named.label} is on ${svc.label}, which ${adapter.label} sessions cannot use`;
+    }
+    // Accounts there are, just none in this scope: say which way to go.
+    if (!states.length && all.length) {
+      placed.why = scope === "org"
+        ? `no ${adapter.label} account in the org's pool can take it; start it as Personal, or share one`
+        : `no ${adapter.label} account of your own can take it; start it in the org`;
     }
     return fallback ? { ...placed, model: fallback } : placed;
   }
