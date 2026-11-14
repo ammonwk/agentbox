@@ -269,7 +269,7 @@ export function VoiceButton({ voice, disabled }: {
           voice.phase === "idle" ? "Record a voice prompt" : voice.phase === "locked" ? "Finish the recording" : "Release to finish the recording"
         }
         title="Tap to dictate, or hold while you speak"
-        disabled={disabled}
+        disabled={disabled && !live}
         data-rec={live ? voice.phase : undefined}
         data-live={voice.live || undefined}
         {...voice.button}

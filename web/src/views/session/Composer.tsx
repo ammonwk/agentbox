@@ -231,7 +231,6 @@ export function Composer({ session, accounts, skills, textareaRef }: {
 
   /** Put a voice message into words, after what is already in the box, to be read over before Send. */
   async function hear(audio: Blob) {
-    if (busy) return;
     setSpoke(true);
     setHearing(true);
     try {
@@ -406,8 +405,9 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               className="cmp-go"
               variant="ghost"
               icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
-              loading={busy}
-              disabled={!!session.dialog || (talks ? images.uploading : !text.trim() || images.uploading)}
+              // While recording the button is the recording's ✓, whatever else is under way.
+              loading={busy && !recording}
+              disabled={!recording && (!!session.dialog || (talks ? images.uploading : !text.trim() || images.uploading))}
               title={session.dialog ? "Choose an option in the Timeline first" : "Send (Enter)"}
               aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
               data-ready={text.trim() ? true : undefined}
