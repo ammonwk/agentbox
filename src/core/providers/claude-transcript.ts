@@ -375,10 +375,10 @@ const FATAL_ERROR_TEXT =
 const GRANT_ERROR_TEXT = /requires an access grant/i;
 
 /** "Login expired · Please run /login" mid-turn, on a login the org store
- *  keeps: its refresh revokes the access token every running CLI holds, and
- *  each one mid-turn stops here seconds later (every session on ammon3 at
- *  once, 2026-11-14). The home already has the new token, so the next try
- *  goes through. A login that really ended stops again, and the nudges give
+ *  keeps: seconds after the store writes a fresh token to the home, every
+ *  CLI mid-turn has it refused (every session on ammon3 at once,
+ *  2026-11-14), finds the same token on disk, and fails a refresh with the
+ *  placeholder. The token works by the next try. A login that really ended stops again, and the nudges give
  *  up after a few. */
 const ROTATED_LOGIN_TEXT = /^Login expired\b/i;
 
